@@ -188,9 +188,17 @@ export async function retrieveContext(
       const callers = leaves.filter((u) => u.family === family && u.name !== d && (stepIsTest || !isTestPath(u.file)) && refsOf(u).has(d));
       callers.sort((a, b) => near(b.file) - near(a.file) || a.end - a.start - (b.end - b.start));
       callers.slice(0, 2).forEach((u, k) => {
-        const [start, end] = callerRange(index.get(u.file)!, u, d);
+        const fi = index.get(u.file)!;
+        const [start, end] = callerRange(fi, u, d);
         const snip = snippet(index, u.file, start, end, "caller", d);
         snip.within = u.label;
+        const re = symbolRe(d);
+        snip.focus = [];
+        for (let l = snip.start; l <= snip.end; l++) if (re.test(fi.lines[l - 1] ?? "")) snip.focus.push(l);
+        snip.called = snip.focus.some((l) => new RegExp(`${re.source}\\s*(<[^>]*>)?\\(`).test(fi.lines[l - 1] ?? ""));
+        // Without its opening line a slice of a big function or table is hard to place, so keep it.
+        const open = u.node.startPosition.row + 1;
+        if (snip.start > open) snip.head = { line: open, text: fi.lines[open - 1] ?? "" };
         candidates.push({ score: 30 + 3 * near(u.file) - 4 * k, snip });
       });
     }
@@ -360,16 +368,24 @@ function definitionRange(u: Unit): [number, number] {
   return [from, Math.max(u.start, from + DEF_HEAD_LINES - 1)];
 }
 
+/** Matches a whole-word use of `symbol`. */
+function symbolRe(symbol: string): RegExp {
+  return new RegExp(`(?<![\\w$])${symbol.replace(/[$]/g, "\\$")}(?![\\w$])`);
+}
+
 function callerRange(fi: FileIndex, u: Unit, symbol: string): [number, number] {
   if (u.end - u.start + 1 <= 2 * CALLER_WINDOW + 3) return [u.start, u.end];
-  const re = new RegExp(`(^|[^\\w$])${symbol.replace(/[$]/g, "\\$")}([^\\w$]|$)`);
+  const re = symbolRe(symbol);
   let hit = u.start;
   for (let l = u.start + 1; l <= u.end; l++)
     if (re.test(fi.lines[l - 1] ?? "")) {
       hit = l;
       break;
     }
-  const start = Math.max(u.start, hit - CALLER_WINDOW);
+  // Start right after the opening line rather than leave a one-line gap.
+  let start = Math.max(u.start, hit - CALLER_WINDOW);
+  const open = u.node.startPosition.row + 1;
+  if (start === open + 1) start = open;
   return [start, Math.min(u.end, start + 2 * CALLER_WINDOW)];
 }
 

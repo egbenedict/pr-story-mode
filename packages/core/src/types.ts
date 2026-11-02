@@ -81,7 +81,11 @@ export type ContextSnippet = {
   end: number;
   reason: "definition" | "caller" | "container";
   symbol: string; // the symbol that links it to the step
-  within?: string; // for callers: the function the call sits in
+  within?: string; // for callers: the function (or table, class…) the use sits in
+  called?: boolean; // for callers: the symbol is called there, not just referenced
+  /** The opening line of `within`, when the snippet starts below it (shown above a "⋯" gap). */
+  head?: { line: number; text: string };
+  focus?: number[]; // lines that mention `symbol`
   code: string;
 };
 

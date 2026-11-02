@@ -163,10 +163,16 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
 
   const CONTEXT_OPEN_MAX = 3; // longer context snippets start collapsed; a citation opens them
   const contextBlock = (c: ContextSnippet) => {
-    const rows = c.code
-      .split("\n")
-      .map((l, i) => `<tr data-n="${c.start + i}"><td class="ln">${c.start + i}</td><td class="code">${esc(l) || " "}</td></tr>`)
-      .join("");
+    const focus = new Set(c.focus ?? []);
+    const head = c.head
+      ? `<tr class="ctx-open" data-n="${c.head.line}"><td class="ln">${c.head.line}</td><td class="code">${esc(c.head.text) || " "}</td></tr><tr class="gap"><td colspan="2">⋯ ${c.start - c.head.line - 1} line${c.start - c.head.line - 1 === 1 ? "" : "s"}</td></tr>`
+      : "";
+    const rows =
+      head +
+      c.code
+        .split("\n")
+        .map((l, i) => `<tr data-n="${c.start + i}"${focus.has(c.start + i) ? ' class="focus"' : ""}><td class="ln">${c.start + i}</td><td class="code">${esc(l) || " "}</td></tr>`)
+        .join("");
     const n = c.end - c.start + 1;
     const caption = contextCaption(c).replace(/^./, (ch) => ch.toUpperCase());
     return `<details class="context"${n <= CONTEXT_OPEN_MAX ? " open" : ""}><summary class="context-head"><span class="tag-unchanged">Unchanged</span> ${inline(caption)} <span class="path">${esc(c.file)} · L${c.start}–${c.end}</span></summary><table class="diff ctx" data-file="${esc(c.file)}">${rows}</table></details>`;
@@ -316,6 +322,9 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .tag-unchanged { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-right: 4px; }
 .diff.ctx { color: var(--muted); }
 .diff.ctx .code { padding-left: 14px; }
+.diff.ctx tr.focus td.code { color: var(--ink); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.diff.ctx tr.focus td.ln { color: var(--accent); opacity: 1; }
+.diff.ctx tr.ctx-open td.code { color: var(--ink); }
 .cite.ctx { border-style: dashed; }
 .mechanical { margin: 48px 0 0 50px; border-top: 1px solid var(--line); padding-top: 16px; }
 .mechanical summary { cursor: pointer; font-weight: 600; }

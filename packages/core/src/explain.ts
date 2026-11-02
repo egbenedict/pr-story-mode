@@ -18,7 +18,7 @@ Voice: describe the changes in the third person. Make the code or the PR the sub
 - The first beat of a step follows from the step before; where the topic shifts, make that connection in its first sentence.
 - Write plain sentences: no headings, bullet lists or dramatic framing. Put identifiers, flags, file names and literal values in backticks.
 - \`cites\` lists the lines a beat discusses, as the atom ID with the first and last line number. Cite only atoms shown in this request.
-- Some steps come with unchanged code the PR did not touch, labeled C1, C2 and so on: a definition the step uses, an existing caller of something the step changes, or the class the code sits in. The reader sees it just above the step. Use it where it explains the change, for example what a called helper returns or which existing callers a new behavior reaches, and cite it with its label (\`atomId\` "C2") and its line numbers. Don't walk through the context itself, and never end a beat on a context line.`;
+- Some steps come with unchanged code the PR did not touch, labeled C1, C2 and so on: a definition the step uses, an existing caller of something the step changes, or the class the code sits in. The reader sees it just above the step. Use it where it explains the change, for example what a called helper returns or which existing callers a new behavior reaches, and cite it with its label (\`atomId\` "C2") and its line numbers. Don't walk through the context itself, and never end a beat on a context line. In context, \`>\` marks the lines that mention the linking symbol, and a line followed by \`…\` is the opening line of the code the snippet comes from.`;
 
 export const EXPLAIN_SCHEMA: JSONSchema = {
   type: "object",
@@ -201,7 +201,7 @@ export async function explainSteps(
             const ok = (lo: number, hi: number) => typeof start === "number" && typeof end === "number" && start <= end && start >= lo && end <= hi;
             if (range && ok(range[0], range[1])) {
               cites.push({ atomId: atomId as string, lines: [start as number, end as number] });
-            } else if (snip && ok(snip.start, snip.end)) {
+            } else if (snip && (ok(snip.start, snip.end) || (snip.head && start === snip.head.line && end === snip.head.line))) {
               cites.push({ atomId: "", file: snip.file, lines: [start as number, end as number] });
             } else {
               stats.groundingFailures++;
@@ -220,15 +220,16 @@ export async function explainSteps(
 /** "definition of `clamp`", "a caller of `run` (in `main`)", "the class `Scheduler`". */
 export function contextCaption(c: ContextSnippet): string {
   if (c.reason === "definition") return `definition of \`${c.symbol}\``;
-  if (c.reason === "caller") return `existing use of \`${c.symbol}\`${c.within ? ` in \`${c.within}\`` : ""}`;
+  if (c.reason === "caller") return `\`${c.symbol}\` is ${c.called ? "called" : "referenced"}${c.within ? ` in \`${c.within}\`` : " here"}`;
   return `enclosing \`${c.symbol}\``;
 }
 
 function numbered(c: ContextSnippet): string {
-  return c.code
-    .split("\n")
-    .map((l, k) => `${String(c.start + k).padStart(5)}   ${l}`)
-    .join("\n");
+  const head = c.head ? [`${String(c.head.line).padStart(5)}   ${c.head.text}`, "  …"] : [];
+  return [
+    ...head,
+    ...c.code.split("\n").map((l, k) => `${String(c.start + k).padStart(5)} ${c.focus?.includes(c.start + k) ? ">" : " "} ${l}`),
+  ].join("\n");
 }
 
 function shownRange(rows: SnippetRow[]): [number, number] {

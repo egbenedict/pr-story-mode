@@ -35,6 +35,15 @@ export function checkout(cart: number[]) {
 }
 `,
     "test/helpers.ts": `export const round2 = (x: number) => x;\n`,
+    // A long table that refers to \`total\` without calling it, like a C function registry.
+    "src/registry.ts": `import { total } from "./price";
+
+export const handlers = {
+${Array.from({ length: 12 }, (_, k) => `  op${k}: (x: number[]) => x.length + ${k},`).join("\n")}
+  sum: total,
+${Array.from({ length: 12 }, (_, k) => `  more${k}: (x: number[]) => x.length - ${k},`).join("\n")}
+};
+`,
     "README.md": "prices\n",
   },
   {
@@ -55,10 +64,10 @@ export function total(items: number[]): number {
 afterAll(() => repo.cleanup());
 const pr = repo.pr;
 
-async function contextFor(sym: string, withSource: boolean) {
+async function contextFor(sym: string, withSource: boolean, maxSnippetsPerStep = 3) {
   const atoms = classifyAtoms(pr, await atomizePR(pr, host));
   const steps = atoms.filter((a) => !a.mechanical).map((a) => ({ atomIds: [a.id] }));
-  const { context, stats } = await retrieveContext(pr, atoms, steps, host, { source: withSource ? localContextSource(repo.dir, pr.headSha) : null });
+  const { context, stats } = await retrieveContext(pr, atoms, steps, host, { source: withSource ? localContextSource(repo.dir, pr.headSha) : null, maxSnippetsPerStep });
   const i = steps.findIndex((s) => atoms.find((a) => a.id === s.atomIds[0])!.symbolPath.includes(sym));
   return { ctx: context[i] as ContextSnippet[], stats };
 }
@@ -84,6 +93,20 @@ describe("context retrieval", () => {
     expect(caller.code).toContain("const sum = total(cart);");
     expect(ctx.some((c) => c.file.startsWith("test/"))).toBe(false);
     expect(stats.extraFiles).toBeGreaterThan(0);
+  });
+
+  it("keeps the opening line of a long use, marks the matching line, and says whether it is a call", async () => {
+    const { ctx } = await contextFor("total", true, 4);
+    const table = ctx.find((c) => c.within === "handlers")!;
+    expect(table).toBeDefined();
+    expect(table.called).toBe(false);
+    expect(table.head).toEqual({ line: 3, text: "export const handlers = {" });
+    expect(table.start).toBeGreaterThan(4);
+    expect(table.focus).toEqual([16]);
+    expect(table.code).toContain("sum: total,");
+    const call = ctx.find((c) => c.within === "checkout")!;
+    expect(call.called).toBe(true);
+    expect(call.head).toBeUndefined(); // short enough to show whole
   });
 
   it("recognises test paths", () => {
@@ -128,7 +151,8 @@ describe("context in stories", () => {
     const html = renderStoryHtml(pr, r);
     expect(html).toContain('<span class="tag-unchanged">Unchanged</span>');
     expect(html).toContain(`class="cite ctx" href="#" data-file="${cited[0].file}"`);
-    expect(html).toMatch(/<table class="diff ctx" data-file="[^"]+"><tr data-n="\d+">/);
+    expect(html).toMatch(/<table class="diff ctx" data-file="[^"]+"><tr data-n="\d+"/);
+    expect(html).toContain("is called in <code>checkout</code>");
   });
 
   it("can be turned off", async () => {
