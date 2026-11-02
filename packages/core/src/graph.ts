@@ -6,12 +6,22 @@ export type Edge = { from: string; to: string; symbol: string };
 export function buildGraph(atoms: ChangeAtom[]): Edge[] {
   const definers = new Map<string, string[]>();
   for (const a of atoms) for (const d of a.defines) definers.set(d, [...(definers.get(d) ?? []), a.id]);
+  // Members by bare name, for `self.m()` in a class that inherits `m` (no `C.m` in the PR).
+  const members = new Map<string, string[]>();
+  for (const a of atoms)
+    for (const d of a.defines) {
+      const dot = d.lastIndexOf(".");
+      if (dot > 0) members.set(d.slice(dot + 1), [...(members.get(d.slice(dot + 1)) ?? []), a.id]);
+    }
+  // `.b` (a property read or object key) links only to members named `b`.
+  const definersOf = (r: string) =>
+    r.startsWith(".") ? members.get(r.slice(1)) : (definers.get(r) ?? (r.includes(".") ? members.get(r.slice(r.lastIndexOf(".") + 1)) : undefined));
 
   const edges: Edge[] = [];
   const seen = new Set<string>();
   for (const b of atoms) {
     for (const r of b.references) {
-      for (const from of definers.get(r) ?? []) {
+      for (const from of definersOf(r) ?? []) {
         if (from === b.id) continue;
         const k = `${from}>${b.id}`;
         if (seen.has(k)) continue;

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { ParserHost, type GrammarLoader } from "@prstory/core";
+import { dirname, join } from "node:path";
+import { ParserHost, type GrammarLoader, type QueryLoader } from "@prstory/core";
 
 const require = createRequire(import.meta.url);
 
@@ -28,6 +29,33 @@ export const loadGrammar: GrammarLoader = async (grammar) => {
   }
 };
 
+/** Query files per grammar. TypeScript's tags only add to JavaScript's, so both are used. */
+const QUERIES: Record<string, string[]> = {
+  typescript: ["tree-sitter-javascript/queries", "tree-sitter-typescript/queries"],
+  tsx: ["tree-sitter-javascript/queries", "tree-sitter-typescript/queries"],
+  javascript: ["tree-sitter-javascript/queries"],
+  python: ["tree-sitter-python/queries"],
+  c: ["tree-sitter-c/queries"],
+  cpp: ["tree-sitter-c/queries", "tree-sitter-cpp/queries"],
+  go: ["tree-sitter-go/queries"],
+  rust: ["tree-sitter-rust/queries"],
+  java: ["tree-sitter-java/queries"],
+};
+
+/** Loads query files (such as tags.scm) shipped with the tree-sitter-* packages. */
+export const loadQuery: QueryLoader = async (grammar, name) => {
+  const out: string[] = [];
+  for (const dir of QUERIES[grammar] ?? []) {
+    try {
+      const pkg = dirname(require.resolve(`${dir.split("/")[0]}/package.json`));
+      out.push(await readFile(join(pkg, dir.split("/").slice(1).join("/"), `${name}.scm`), "utf8"));
+    } catch {
+      // not shipped
+    }
+  }
+  return out.length ? out : null;
+};
+
 export function createHost(): ParserHost {
-  return new ParserHost(loadGrammar);
+  return new ParserHost(loadGrammar, undefined, loadQuery);
 }

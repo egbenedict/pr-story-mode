@@ -14,3 +14,4 @@ export * from "./github";
 export * from "./pipeline";
 export { hashString, stableId } from "./hash";
 export * from "./context";
+export * from "./symbols";

@@ -10,6 +10,7 @@ import {
 } from "./languages";
 import type { ParserHost } from "./parse";
 import { stableId } from "./hash";
+import { unitSymbols } from "./symbols";
 
 /** Where a changed line lives in the syntax tree. */
 type Location =
@@ -98,6 +99,7 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
   const needHead = allLines.some((l) => l.ref.side === "RIGHT");
   const parsed = pack && (!needBase || baseTree) && (!needHead || headTree);
   const tier: 0 | 1 | 2 = parsed ? pack!.tier : 0;
+  const tags = parsed ? await host.query(pack!.grammar, "tags") : null;
 
   // 1. Locate each changed line in its tree.
   const located: { line: LineInfo; loc: Location }[] = allLines.map((line) => {
@@ -161,11 +163,17 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
       const last = g.path[g.path.length - 1];
       if (last && /^[\w$.#:~]+$/.test(last)) defines.push(last.replace(/^.*(\.|::)/, ""));
     }
-    const refs = new Set<string>();
+    let refs = new Set<string>();
     if (pack && tier > 0) {
       const nodes = g.headNodes.length ? g.headNodes : g.baseNodes;
-      for (const n of nodes) collectIdentifiers(n, pack, refs);
+      const sym = unitSymbols(nodes, pack, tags);
+      refs = sym.refs;
+      // The grammar's tags catch names the unit name misses, e.g. `const a = 1, b = 2`.
+      if (!g.isImport) for (const d of sym.defs) if (!defines.includes(d) && /^[\w$#~]+$/.test(d)) defines.push(d);
     }
+    // A member is also known by its class, so `this.m()` / `self.m()` links only to the class's own `m`.
+    const owner = g.path.length >= 2 ? g.path[g.path.length - 2] : null;
+    if (g.named && !g.isImport && defines.length && owner && /^[\w$]+$/.test(owner)) defines.push(`${owner}.${defines[0]}`);
     for (const d of defines) refs.delete(d);
 
     out.push({
@@ -177,8 +185,8 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
       baseRange: g.baseRange,
       headRange: g.headRange,
       hunkLines: sortRefs(g.lines),
-      defines: defines.filter((d) => !STOP_NAMES.has(d)),
-      references: [...refs].filter((r) => r.length > 1 && !STOP_NAMES.has(r)).slice(0, 300),
+      defines: defines.filter((d) => !STOP_NAMES.has(d.slice(d.lastIndexOf(".") + 1))),
+      references: [...refs].filter((r) => r.length > 1 && !STOP_NAMES.has(r.slice(r.lastIndexOf(".") + 1))).slice(0, 300),
       supportTier: tier,
     });
   }
@@ -331,21 +339,6 @@ function declaratorName(node: Node): string | null {
 
 function cleanName(s: string): string {
   return s.replace(/^["'`]|["'`]$/g, "").replace(/\s+/g, " ").slice(0, 80);
-}
-
-export function collectIdentifiers(node: Node, pack: LanguagePack, out: Set<string>) {
-  const stack: Node[] = [node];
-  let visited = 0;
-  while (stack.length && visited < 20000) {
-    const n = stack.pop()!;
-    visited++;
-    if (pack.isIdentifier(n.type)) {
-      out.add(n.text);
-      // Look inside `Ns::name` / `crate::name` so the bare name is found too.
-      if (!/qualified|scoped/.test(n.type)) continue;
-    }
-    for (const c of n.namedChildren) if (c) stack.push(c);
-  }
 }
 
 // ---------- helpers ----------

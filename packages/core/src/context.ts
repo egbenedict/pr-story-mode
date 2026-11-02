@@ -1,5 +1,6 @@
 import type { Node } from "web-tree-sitter";
-import { collectIdentifiers, nameOf, STOP_NAMES } from "./atomize";
+import { nameOf, STOP_NAMES } from "./atomize";
+import { unitSymbols } from "./symbols";
 import { isGeneratedPath, isLockfile, packForPath, type LanguagePack } from "./languages";
 import type { ParserHost } from "./parse";
 import type { ChangeAtom, ContextSnippet, PRInput } from "./types";
@@ -58,6 +59,8 @@ function familyOf(pack: LanguagePack): string {
 }
 
 const identLike = /^[\w$.#:~]+$/;
+/** `Class.method` → `method` (qualified names come from `this.method()` calls). */
+const bareName = (s: string) => s.slice(s.lastIndexOf(".") + 1);
 const bare = (name: string) => (identLike.test(name) ? name.replace(/^.*(\.|::)/, "") : "");
 
 /**
@@ -90,7 +93,8 @@ export async function retrieveContext(
   const stepAtoms = steps.map((s) =>
     s.atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a && !a.mechanical && !a.symbolPath.includes("<imports>")),
   );
-  const useful = (s: string) => s.length > 2 && !STOP_NAMES.has(s) && !definedInPR.has(s);
+  // Member-only references (`.b`, from `a.b` reads) are too ambiguous to look up as context.
+  const useful = (s: string) => s.length > 2 && !s.startsWith(".") && !STOP_NAMES.has(s) && !definedInPR.has(s);
   const stepRefs = stepAtoms.map((as) => [...new Set(as.flatMap((a) => a.references))].filter(useful));
   const modifiedDefs = stepAtoms.map((as) =>
     as.filter((a) => a.kind !== "added").flatMap((a) => a.defines).filter((d) => d.length > 2 && !STOP_NAMES.has(d)),
@@ -102,7 +106,7 @@ export async function retrieveContext(
     const counts = new Map<string, number>();
     for (const refs of stepRefs) for (const r of refs) if (!known.has(r)) counts.set(r, (counts.get(r) ?? 0) + 1);
     const unresolved = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 80).map(([s]) => s);
-    const changedSyms = [...new Set(modifiedDefs.flat())].slice(0, 40);
+    const changedSyms = [...new Set(modifiedDefs.flat().map(bareName))].slice(0, 40);
     const budget = opts.maxExtraFiles ?? 30;
     const paths: string[] = [];
     try {
@@ -173,13 +177,18 @@ export async function retrieveContext(
 
     // Definitions of symbols the step uses.
     for (const r of stepRefs[i]) {
-      const defs = withoutForwardDecls((byName.get(r) ?? []).filter((u) => u.family === family && usable(u, r)));
+      // `C.m` (from `this.m()`) only matches C's own `m`.
+      const name = bareName(r);
+      const candidates0 = (byName.get(name) ?? []).filter((u) => u.family === family && usable(u, name));
+      const own = candidates0.filter((u) => name === r || u.label === r || u.label.endsWith(`.${r}`));
+      // `self.m()` with no `C.m` in sight: `m` is probably inherited, so any member `m` will do.
+      const defs = withoutForwardDecls(own.length || name === r ? own : candidates0.filter((u) => u.member));
       if (!defs.length || defs.length > MAX_DEFS_PER_NAME) continue;
       // A definition outside the PR's files counts only when it is the only one.
       const best = [...defs].sort((a, b) => near(b.file) - near(a.file) || a.end - a.start - (b.end - b.start))[0];
       if (!index.get(best.file)!.inPR && defs.length > 1) continue;
       const [start, end] = definitionRange(best);
-      const n = uses(changedText[i], r);
+      const n = uses(changedText[i], name);
       candidates.push({ score: 20 + (n ? 10 + Math.min(n, 5) : 0) + 3 * near(best.file), snip: snippet(index, best.file, start, end, "definition", r) });
     }
 
@@ -189,10 +198,10 @@ export async function retrieveContext(
       callers.sort((a, b) => near(b.file) - near(a.file) || a.end - a.start - (b.end - b.start));
       callers.slice(0, 2).forEach((u, k) => {
         const fi = index.get(u.file)!;
-        const [start, end] = callerRange(fi, u, d);
+        const [start, end] = callerRange(fi, u, bareName(d));
         const snip = snippet(index, u.file, start, end, "caller", d);
         snip.within = u.label;
-        const re = symbolRe(d);
+        const re = symbolRe(bareName(d));
         snip.focus = [];
         for (let l = snip.start; l <= snip.end; l++) if (re.test(fi.lines[l - 1] ?? "")) snip.focus.push(l);
         snip.called = snip.focus.some((l) => new RegExp(`${re.source}\\s*(<[^>]*>)?\\(`).test(fi.lines[l - 1] ?? ""));
@@ -322,7 +331,7 @@ function refsOf(u: Unit): Set<string> {
   if (!u.refs) {
     u.refs = new Set();
     const pack = packs.get(u);
-    if (pack) collectIdentifiers(u.node, pack, u.refs);
+    if (pack) u.refs = unitSymbols([u.node], pack, null).refs;
   }
   return u.refs;
 }

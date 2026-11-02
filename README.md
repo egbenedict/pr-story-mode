@@ -44,7 +44,11 @@ ingest → parse (tree-sitter) → atomize → classify + symbol graph → [summ
 - **Ingest** (`github.ts`, `cli/src/local.ts`): the diff, the base and head versions of changed files, and for GitHub PRs up to three issues the description says it fixes or closes. Linked issues go into every prompt after the description.
 - **Atomize** (`packages/core/src/atomize.ts`): each changed line is mapped to its smallest enclosing syntactic unit. A hunk that spans two functions becomes two atoms, and several hunks inside one function merge into one atom. Comments and decorators attach to the code they precede.
 - **Classify** (`classify.ts`): formatting-only edits, pure renames, import reshuffles, lockfiles and generated files are tagged mechanical. A rename must be consistent across the PR and introduce a new name, so swapped arguments are never hidden as "mechanical". Code removed in one place and added verbatim elsewhere is tagged as moved.
-- **Graph** (`graph.ts`): `A → B` when A defines a symbol that B references. Cycles are handled as strongly connected components.
+- **Graph** (`symbols.ts`, `graph.ts`): `A → B` when A defines a symbol that B references. Cycles are handled as strongly connected components.
+  - Definitions are the unit's name plus what the grammar's `tags.scm` query marks as defined in it, for example `const a = 1, b = 2`. Members are also known by their class, as `C.m`.
+  - References are identifiers, minus parameters and local variables bound inside the atom, and minus keyword-argument names. Name matching alone can't do this, because C and C++ ship no reference queries and JS/Python only tag calls.
+  - Members get special rules. `this.m()` / `self.m()` inside class `C` becomes `C.m` and links only to C's own `m`, or to an inherited `m` when C has none in the PR. Other property reads and writes, and object keys (`opts.retries`, `{ retries: 3 }`), link only to class or interface members, never to a global of the same name. `a.b()` and `@a.b` decorators link by name.
+  - On the 60 benchmark PRs this removed 92 edge pairs (class atoms "using" their own method names, `ctx.request` matched to the global `request`, local variables shadowing functions) and found 87 new ones, mostly calls between `#private` methods that weren't visible before.
 - **Staged ordering** (`order.ts → summarizeAtoms`): when the ordering prompt with code would exceed 40k tokens (or half the model's context window), atoms are first summarized in batches of up to 30, four calls at a time. The planner then sees one or two lines per atom plus the dependency edges, not the code. Atoms the model skips get a template line, so nothing drops out.
 - **Order** (`order.ts`): the model returns a flat list of steps. `validatePlan` checks that every atom appears exactly once, no IDs are unknown, and no step comes before a dependency unless it declares an `orderOverride`. Errors are sent back for up to 3 repair rounds, then the pipeline falls back to pure dependency order.
 - **Context** (`context.ts`): each step gets up to 3 snippets (60 lines) of code the PR did not change. In rank order: the best definition of a symbol the step uses, the best existing caller of something the step modifies, then the rest by score, then the header of the class the code sits in. Symbols used on the changed lines rank first. Definitions keep the doc comment above them. A slice of a long function or table keeps its opening line, and the lines that mention the symbol are highlighted. A snippet is never shown twice in a story. Definitions come from the PR's own files, and with a local clone from the rest of the repository through `git grep` (a definition-shaped regex at the head commit). To avoid false matches, a definition in another file needs a matching import in TS, JS and Python, ambiguous names (more than 3 definitions) are skipped, one-line class members are skipped, and test files never supply context for non-test code. The reader shows context collapsed above the step, labeled "Unchanged".
@@ -71,7 +75,7 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ## Tests and benchmark
 
 ```bash
-npm test            # 42 tests: diff parsing, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues
+npm test            # 45 tests: diff parsing, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues
 npm run typecheck
 ```
 
@@ -83,10 +87,10 @@ Phase 1 gate ("coverage holds on 20 real PRs"), run without an LLM:
 | sindresorhus/ky (last 20 commits ≥ 20 lines) | 20 | TypeScript | 20/20 |
 | luau-lang/luau (last 20 commits, 20 to 3,000 lines) | 20 | C++ | 20/20 |
 
-With context retrieval from the local clone (still no LLM), coverage holds on all 60. Unchanged snippets per run: Flask 160 across 376 steps, ky 346 across 468, luau 192 across 222. Average time per PR: 0.5 s, 1.1 s and 2.8 s.
+With context retrieval from the local clone (still no LLM), coverage holds on all 60. Edges: Flask 235, ky 235, luau 258. Unchanged snippets: Flask 143 across 376 steps, ky 401 across 468, luau 190 across 222. Average time per PR: 0.4 s, 0.9 s and 2.6 s.
 
 ## Not done yet
 
-- Phase 2: definition/reference edges from `tags.scm` queries instead of name matching; context outside the PR's files for GitHub PRs without a local clone; running the benchmark end to end with a model (needs an API key) to measure grounding, repair rounds and cost.
+- Phase 2: context outside the PR's files for GitHub PRs without a local clone; running the benchmark end to end with a model (needs an API key) to measure grounding, repair rounds and cost.
 - Browser extension, comment round-trip, IndexedDB caching, and Bedrock, Vertex and Azure adapters (Phase 3).
 - The 200 to 500 PR benchmark, model comparison and reviewer study (Phase 4).

@@ -41,7 +41,7 @@ const tsCommon = {
   isWrapper: set("export_statement", "ambient_declaration", "expression_statement"),
   isImport: set("import_statement"),
   isLeading: set("comment", "decorator"),
-  isIdentifier: set("identifier", "type_identifier", "property_identifier", "shorthand_property_identifier", "shorthand_property_identifier_pattern"),
+  isIdentifier: set("identifier", "type_identifier", "property_identifier", "private_property_identifier", "shorthand_property_identifier", "shorthand_property_identifier_pattern"),
 };
 
 export const TYPESCRIPT: LanguagePack = { id: "typescript", grammar: "typescript", extensions: [".ts", ".mts", ".cts"], ...tsCommon };
