@@ -1,11 +1,13 @@
 import {
   atomLabel,
   atomSnippet,
+  contextCaption,
   lineCounts,
   reindentRuns,
   walkthrough,
   type ChangeAtom,
   type Citation,
+  type ContextSnippet,
   type PRInput,
   type PipelineResult,
   type SnippetRow,
@@ -149,15 +151,25 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
 
   const citeLinks = (cites: Citation[]) =>
     cites
-      .map((c) => `<a class="cite" href="#atom-${c.atomId}" data-atom="${c.atomId}" data-from="${c.lines[0]}" data-to="${c.lines[1]}">${c.lines[0] === c.lines[1] ? `L${c.lines[0]}` : `L${c.lines[0]}–${c.lines[1]}`}</a>`)
+      .map((c) => {
+        const range = c.lines[0] === c.lines[1] ? `L${c.lines[0]}` : `L${c.lines[0]}–${c.lines[1]}`;
+        if (c.file) {
+          const short = c.file.split("/").pop();
+          return `<a class="cite ctx" href="#" data-file="${esc(c.file)}" data-from="${c.lines[0]}" data-to="${c.lines[1]}" title="Unchanged code in ${esc(c.file)}">${esc(short ?? "")} ${range}</a>`;
+        }
+        return `<a class="cite" href="#atom-${c.atomId}" data-atom="${c.atomId}" data-from="${c.lines[0]}" data-to="${c.lines[1]}">${range}</a>`;
+      })
       .join("");
 
-  const contextBlock = (c: { file: string; start: number; end: number }) => {
-    const text = files.get(c.file)?.headText;
-    if (!text) return "";
-    const lines = text.split("\n").slice(c.start - 1, c.end);
-    const rows = lines.map((l, i) => `<tr><td class="ln"></td><td class="ln">${c.start + i}</td><td class="code">${esc(l) || " "}</td></tr>`).join("");
-    return `<div class="context"><div class="context-head">Unchanged · ${esc(c.file)} lines ${c.start}–${c.end}</div><table class="diff">${rows}</table></div>`;
+  const CONTEXT_OPEN_MAX = 3; // longer context snippets start collapsed; a citation opens them
+  const contextBlock = (c: ContextSnippet) => {
+    const rows = c.code
+      .split("\n")
+      .map((l, i) => `<tr data-n="${c.start + i}"><td class="ln">${c.start + i}</td><td class="code">${esc(l) || " "}</td></tr>`)
+      .join("");
+    const n = c.end - c.start + 1;
+    const caption = contextCaption(c).replace(/^./, (ch) => ch.toUpperCase());
+    return `<details class="context"${n <= CONTEXT_OPEN_MAX ? " open" : ""}><summary class="context-head"><span class="tag-unchanged">Unchanged</span> ${inline(caption)} <span class="path">${esc(c.file)} · L${c.start}–${c.end}</span></summary><table class="diff ctx" data-file="${esc(c.file)}">${rows}</table></details>`;
   };
 
   const steps = story.steps
@@ -296,8 +308,15 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .diff tr.hl td { box-shadow: inset 3px 0 0 var(--accent); }
 .diff tr.hl td.code { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .empty { margin: 0; padding: 10px 12px; color: var(--muted); font-size: 13px; }
-.context { margin-top: 12px; border: 1px dashed var(--line); border-radius: 8px; overflow: hidden; }
-.context-head { font-size: 12px; color: var(--muted); padding: 5px 12px; background: var(--ctx-bg); }
+.context { margin: 0 0 12px; border: 1px dashed var(--line); border-radius: 8px; overflow: hidden; background: var(--bg); }
+.context + .context { margin-top: -4px; }
+.context-head { font-size: 12.5px; color: var(--muted); padding: 5px 12px; background: var(--ctx-bg); cursor: pointer; list-style-position: inside; }
+.context-head code { font-size: 0.88em; background: none; padding: 0; color: var(--ink); }
+.context-head .path { font: 11.5px var(--mono); margin-left: 6px; opacity: .85; }
+.tag-unchanged { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-right: 4px; }
+.diff.ctx { color: var(--muted); }
+.diff.ctx .code { padding-left: 14px; }
+.cite.ctx { border-style: dashed; }
 .mechanical { margin: 48px 0 0 50px; border-top: 1px solid var(--line); padding-top: 16px; }
 .mechanical summary { cursor: pointer; font-weight: 600; }
 .tag { display: inline-block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: 14px; }
@@ -323,7 +342,7 @@ footer { margin: 48px 0 0 50px; font-size: 12.5px; color: var(--muted); border-t
 <main>
 <header>
   <h1>${inline(pr.title)}</h1>
-  <p class="sub">${prLink} · head ${esc(story.headSha.slice(0, 7))} · ${story.steps.length} steps · ${metrics.changedLines} changed lines</p>
+  <p class="sub">${prLink}${(pr.issues ?? []).map((i) => ` · fixes <a href="${esc(i.url ?? "#")}" target="_blank" rel="noopener">#${i.number}</a> ${inline(i.title)}`).join("")} · head ${esc(story.headSha.slice(0, 7))} · ${story.steps.length} steps · ${metrics.changedLines} changed lines</p>
   <div class="summary">${blocks(story.summary)}</div>
 </header>
 ${steps}
@@ -385,11 +404,16 @@ ${mechanical}
     document.querySelectorAll('tr.hl').forEach((r) => r.classList.remove('hl'));
     let first = null;
     const scope = step || document;
-    for (const r of scope.querySelectorAll('.walk table.diff[data-atom="' + c.dataset.atom + '"] tr[data-n]')) {
+    const rows = c.dataset.file
+      ? [...scope.querySelectorAll('table.ctx')].filter((t) => t.dataset.file === c.dataset.file).flatMap((t) => [...t.querySelectorAll('tr[data-n]')])
+      : scope.querySelectorAll('.walk table.diff[data-atom="' + c.dataset.atom + '"] tr[data-n]');
+    for (const r of rows) {
       const n = +r.dataset.n, o = r.dataset.o ? +r.dataset.o : NaN;
       if ((n >= from && n <= to) || (o >= from && o <= to)) {
         r.classList.add('hl');
         first ??= r;
+        const det = r.closest('details');
+        if (det) det.open = true;
         const fold = r.closest('tbody.fold-body');
         if (fold && !fold.classList.contains('open')) setFold(fold.previousElementSibling.querySelector('.fold-btn'), true);
       }

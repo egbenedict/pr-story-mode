@@ -1,5 +1,5 @@
 import { dependencyOrder, type Edge } from "./graph";
-import { addUsage, completeJson, estimateTokens } from "./llm";
+import { addUsage, completeJson, estimateTokens, prHeader } from "./llm";
 import { atomLabel, atomSnippet, lineCounts, snippetText } from "./snippet";
 import type { ChangeAtom, JSONSchema, LLMProvider, Msg, PRInput } from "./types";
 import { validatePlan, type Plan } from "./validate";
@@ -47,12 +47,48 @@ export type OrderResult = {
   fallback: boolean; // true when the deterministic dependency order was used
   errors: string[]; // errors from the last failed attempt, if any
   tokens: number;
+  /** Set when the PR was too large to order from code, so atoms were summarized first. */
+  summarized: { batches: number; missing: number } | null;
 };
 
-/** Describe the PR and its atoms for the ordering prompt, shrinking snippets to fit the budget. */
-export function orderPrompt(pr: PRInput, atoms: ChangeAtom[], edges: Edge[], budgetTokens: number): string {
+export type OrderEvent =
+  | { type: "order-attempt"; round: number; errors: string[] }
+  | { type: "summarize"; done: number; total: number };
+
+/** Above this many prompt tokens (or half the context window, if smaller) atoms are summarized first. */
+export const SUMMARIZE_ABOVE_TOKENS = 40_000;
+const SUMMARY_BATCH_TOKENS = 12_000;
+const SUMMARY_BATCH_ATOMS = 30;
+const SUMMARY_CONCURRENCY = 4;
+
+export const SUMMARIZE_SYSTEM = `You help plan the reading order for a code review of a large pull request. You get a batch of change atoms: each is one syntactic unit that changed (a function, a method, a class member, a config block), shown as a diff with \`+\` for added lines, \`-\` for removed lines and \`~\` for lines that only changed indentation.
+
+For every atom in the batch, write one or two plain sentences saying what changed in it: what it defines or modifies, and what new behavior or dependency it introduces. These summaries are all a planner will see when deciding which atoms a reviewer should read first, so name the functions, types and fields involved, in backticks. Describe the code in the third person; do not guess at intent the code does not show. Return exactly one summary per atom ID given.`;
+
+export const SUMMARY_SCHEMA: JSONSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["summaries"],
+  properties: {
+    summaries: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["atomId", "summary"],
+        properties: { atomId: { type: "string" }, summary: { type: "string" } },
+      },
+    },
+  },
+};
+
+/**
+ * Describe the PR and its atoms for the ordering prompt, shrinking snippets to fit the budget.
+ * With `summaries`, each atom is described by its summary instead of its code.
+ */
+export function orderPrompt(pr: PRInput, atoms: ChangeAtom[], edges: Edge[], budgetTokens: number, summaries?: Map<string, string>): string {
   const files = new Map(pr.files.map((f) => [f.path, f]));
-  const header = `# Pull request #${pr.number}: ${pr.title}\n\n${pr.body.trim() || "(no description)"}\n`;
+  const header = prHeader(pr);
   const deps = edges.length
     ? edges.map((e) => `${e.from} → ${e.to} (uses \`${e.symbol}\`)`).join("\n")
     : "(no dependencies found between atoms)";
@@ -64,12 +100,13 @@ export function orderPrompt(pr: PRInput, atoms: ChangeAtom[], edges: Edge[], bud
         const tags = [a.kind, `+${add} −${del}`, a.mechanical ? `mechanical: ${a.mechanical}` : null].filter(Boolean).join(", ");
         const head = `### ${a.id}: ${atomLabel(a)} (${tags})`;
         if (a.mechanical || maxRows === 0) return head;
+        if (summaries) return `${head}\n${summaries.get(a.id) ?? fallbackLabel(a)}`;
         return `${head}\n\`\`\`\n${snippetText(atomSnippet(files.get(a.file), a, 1), maxRows)}\n\`\`\``;
       })
       .join("\n\n");
 
   let body = "";
-  for (const maxRows of [60, 30, 15, 6, 0]) {
+  for (const maxRows of summaries ? [1, 0] : [60, 30, 15, 6, 0]) {
     body = render(maxRows);
     if (estimateTokens(header + body + deps) <= budgetTokens) break;
   }
@@ -85,13 +122,23 @@ export async function orderAtoms(
   atoms: ChangeAtom[],
   edges: Edge[],
   provider: LLMProvider | null,
-  onEvent?: (e: { type: "order-attempt"; round: number; errors: string[] }) => void,
+  onEvent?: (e: OrderEvent) => void,
+  opts: { summarizeAboveTokens?: number } = {},
 ): Promise<OrderResult> {
   const total = { tokens: 0 };
-  if (!provider) return { plan: fallbackPlan(pr, atoms, edges), repairRounds: 0, fallback: true, errors: [], tokens: 0 };
+  if (!provider) return { plan: fallbackPlan(pr, atoms, edges), repairRounds: 0, fallback: true, errors: [], tokens: 0, summarized: null };
 
   const budget = Math.floor(provider.capabilities.maxContextTokens * 0.5);
-  const messages: Msg[] = [{ role: "user", content: orderPrompt(pr, atoms, edges, budget) }];
+  const threshold = Math.min(opts.summarizeAboveTokens ?? SUMMARIZE_ABOVE_TOKENS, budget);
+  let prompt = orderPrompt(pr, atoms, edges, Infinity);
+  let summarized: OrderResult["summarized"] = null;
+  if (estimateTokens(prompt) > threshold) {
+    const s = await summarizeAtoms(pr, atoms, provider, onEvent);
+    total.tokens += s.tokens;
+    summarized = { batches: s.batches, missing: s.missing };
+    prompt = orderPrompt(pr, atoms, edges, budget, s.summaries);
+  }
+  const messages: Msg[] = [{ role: "user", content: prompt }];
   let errors: string[] = [];
 
   for (let round = 0; round <= MAX_REPAIR_ROUNDS; round++) {
@@ -107,7 +154,7 @@ export async function orderAtoms(
     const v = validatePlan(res.json ?? res.text, atoms, edges);
     onEvent?.({ type: "order-attempt", round, errors: v.errors });
     if (v.plan && v.errors.length === 0) {
-      return { plan: v.plan, repairRounds: round, fallback: false, errors: [], tokens: total.tokens };
+      return { plan: v.plan, repairRounds: round, fallback: false, errors: [], tokens: total.tokens, summarized };
     }
     errors = v.errors;
     messages.push({ role: "assistant", content: res.text || JSON.stringify(res.json) });
@@ -117,7 +164,71 @@ export async function orderAtoms(
     });
   }
 
-  return { plan: fallbackPlan(pr, atoms, edges), repairRounds: MAX_REPAIR_ROUNDS, fallback: true, errors, tokens: total.tokens };
+  return { plan: fallbackPlan(pr, atoms, edges), repairRounds: MAX_REPAIR_ROUNDS, fallback: true, errors, tokens: total.tokens, summarized };
+}
+
+/**
+ * Summarize non-mechanical atoms in batches (a few calls at a time) so the ordering prompt can
+ * describe a large PR in a line or two per atom. Atoms the model skips get a template label.
+ */
+export async function summarizeAtoms(
+  pr: PRInput,
+  atoms: ChangeAtom[],
+  provider: LLMProvider,
+  onEvent?: (e: OrderEvent) => void,
+): Promise<{ summaries: Map<string, string>; batches: number; missing: number; tokens: number }> {
+  const files = new Map(pr.files.map((f) => [f.path, f]));
+  const header = prHeader(pr);
+  const perBatch = Math.min(SUMMARY_BATCH_TOKENS, Math.floor(provider.capabilities.maxContextTokens * 0.25));
+
+  const batches: { ids: string[]; text: string[]; tokens: number }[] = [];
+  for (const a of atoms) {
+    if (a.mechanical) continue;
+    const { add, del } = lineCounts(a);
+    let text = `### ${a.id}: ${atomLabel(a)} (${a.kind}, +${add} −${del})\n\`\`\`\n${snippetText(atomSnippet(files.get(a.file), a, 1), 80)}\n\`\`\``;
+    if (estimateTokens(text) > perBatch) text = text.slice(0, perBatch * 4) + "\n…\n\`\`\`";
+    const cost = estimateTokens(text);
+    let b = batches[batches.length - 1];
+    if (!b || b.ids.length >= SUMMARY_BATCH_ATOMS || b.tokens + cost > perBatch) batches.push((b = { ids: [], text: [], tokens: 0 }));
+    b.ids.push(a.id);
+    b.text.push(text);
+    b.tokens += cost;
+  }
+
+  const summaries = new Map<string, string>();
+  const total = { tokens: 0 };
+  let done = 0;
+  const run = async (b: (typeof batches)[number]) => {
+    try {
+      const res = await completeJson(provider, {
+        system: SUMMARIZE_SYSTEM,
+        sharedPrefix: header,
+        messages: [{ role: "user", content: `Summarize each of these ${b.ids.length} atoms.\n\n${b.text.join("\n\n")}` }],
+        schema: SUMMARY_SCHEMA,
+        maxTokens: 8000,
+      });
+      addUsage(total, res.usage);
+      const wanted = new Set(b.ids);
+      const list = (res.json as { summaries?: unknown } | undefined)?.summaries;
+      for (const item of Array.isArray(list) ? list : []) {
+        const { atomId, summary } = item as { atomId?: unknown; summary?: unknown };
+        if (typeof atomId === "string" && wanted.has(atomId) && typeof summary === "string" && summary.trim()) summaries.set(atomId, summary.trim());
+      }
+    } catch {
+      // The batch keeps template labels.
+    }
+    onEvent?.({ type: "summarize", done: ++done, total: batches.length });
+  };
+
+  for (let i = 0; i < batches.length; i += SUMMARY_CONCURRENCY) await Promise.all(batches.slice(i, i + SUMMARY_CONCURRENCY).map(run));
+
+  let missing = 0;
+  for (const a of atoms)
+    if (!a.mechanical && !summaries.has(a.id)) {
+      missing++;
+      summaries.set(a.id, fallbackLabel(a) + ".");
+    }
+  return { summaries, batches: batches.length, missing, tokens: total.tokens };
 }
 
 /** Pure dependency order, one atom per step, mechanical atoms at the end. */

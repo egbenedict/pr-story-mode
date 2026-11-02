@@ -18,7 +18,7 @@ import {
 } from "@prstory/core";
 import { createProvider, estimateCost, type ProviderConfig } from "@prstory/providers";
 import { createHost } from "./grammars";
-import { listCommits, listMerges, loadLocalPR } from "./local";
+import { hasCommit, listCommits, listMerges, loadLocalPR, localContextSource } from "./local";
 import { renderStoryHtml } from "./render";
 
 const USAGE = `pr-story: turn a pull request into a narrated, ordered story.
@@ -38,6 +38,8 @@ Options:
   --effort <level>      Anthropic effort: low|medium|high|xhigh|max (default medium)
   --out <dir>           Output directory (default ./stories/<name>)
   --token <token>       GitHub token (default GITHUB_TOKEN)
+  --repo <dir>          With a PR URL: a local clone to search for unchanged context (needs the head commit)
+  --no-context          Don't show unchanged definitions and callers beside steps
 
 Env: ANTHROPIC_API_KEY, OPENAI_API_KEY, GITHUB_TOKEN, GITHUB_API_URL (GitHub Enterprise).`;
 
@@ -59,6 +61,7 @@ async function main() {
       mode: { type: "string" },
       "min-lines": { type: "string" },
       "max-lines": { type: "string" },
+      "no-context": { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -127,6 +130,18 @@ async function loadInput(target: string | undefined, v: Values): Promise<PRInput
   return loadLocalPR(resolve(repo), base, head, { title: str(v, "title") });
 }
 
+/** Local clone to search for context: the --repo of a local diff, or of a GitHub PR when it has the head commit. */
+function contextSourceFor(pr: PRInput, v: Values) {
+  const repo = str(v, "repo");
+  if (!repo) return null;
+  const dir = resolve(repo);
+  if (!hasCommit(dir, pr.headSha)) {
+    process.stderr.write(`  (${repo} does not have ${pr.headSha.slice(0, 7)}; run \`git fetch\` there for context outside the PR's files)\n`);
+    return null;
+  }
+  return localContextSource(dir, pr.headSha);
+}
+
 function githubLinker(pr: PRInput) {
   if (!pr.url) return undefined;
   return (file: string, side: "LEFT" | "RIGHT", line: number) =>
@@ -142,8 +157,11 @@ async function storyCmd(target: string | undefined, v: Values) {
   const result = await runPipeline(pr, {
     host: createHost(),
     provider,
+    contextSource: contextSourceFor(pr, v),
+    noContext: v["no-context"] === true,
     onEvent: (e) => {
       if (e.type === "stage" && e.stage !== "done") process.stderr.write(`  ${e.stage}…\n`);
+      if (e.type === "summarize") process.stderr.write(`    summarized batch ${e.done} of ${e.total}\n`);
       if (e.type === "order-attempt" && e.errors.length) process.stderr.write(`    plan round ${e.round + 1}: ${e.errors.length} problem(s), repairing\n`);
       if (e.type === "step") process.stderr.write(`    step ${e.index + 1}: ${e.step.label}\n`);
     },
@@ -166,7 +184,8 @@ function printSummary(r: PipelineResult, cost: number | null) {
   const c = r.coverage;
   console.log(`\n${r.story.steps.length} steps, ${r.story.mechanical.length} mechanical, ${m.atoms} atoms (tier 2/1/0: ${m.tierCounts[2]}/${m.tierCounts[1]}/${m.tierCounts[0]}), ${m.edges} dependency edges`);
   console.log(c.ok ? `Coverage: OK, all ${c.totalLines} changed lines shown exactly once` : `Coverage: FAILED (${c.missing.length} missing, ${c.duplicated.length} duplicated, ${c.extra.length} extra)`);
-  console.log(`Order: ${m.fallbackOrder ? "dependency fallback" : "model plan"}, ${m.repairRounds} repair round(s), ${m.orderOverrides} declared override(s), ${m.undeclaredViolations} undeclared violation(s)`);
+  console.log(`Order: ${m.fallbackOrder ? "dependency fallback" : "model plan"}${m.summarized ? ` from summaries (${m.summarized.batches} batches)` : ""}, ${m.repairRounds} repair round(s), ${m.orderOverrides} declared override(s), ${m.undeclaredViolations} undeclared violation(s)`);
+  console.log(`Context: ${m.contextSnippets} unchanged snippet(s) on ${m.stepsWithContext} step(s)${m.contextFiles ? `, ${m.contextFiles} file(s) read from outside the PR` : ""}`);
   if (r.story.meta.provider !== "none") {
     const failPct = m.citations ? ((100 * m.groundingFailures) / m.citations).toFixed(1) : "0";
     console.log(`Citations: ${m.citations}, ${m.groundingFailures} failed grounding (${failPct}%)`);
@@ -202,7 +221,7 @@ async function benchCmd(v: Values) {
     const changed = pr.files.reduce((n, f) => n + f.hunks.reduce((k, h) => k + h.lines.filter((l) => l.type !== "context").length, 0), 0);
     if (changed < minLines || changed > maxLines) continue;
     ran++;
-    const r = await runPipeline(pr, { host, provider });
+    const r = await runPipeline(pr, { host, provider, contextSource: v["no-context"] === true ? null : localContextSource(dir, pr.headSha), noContext: v["no-context"] === true });
     if (r.coverage.ok) passed++;
     const m = r.metrics;
     const row = {
@@ -217,6 +236,9 @@ async function benchCmd(v: Values) {
       tier0: m.tierCounts[0],
       edges: m.edges,
       steps: m.steps,
+      context: m.contextSnippets,
+      contextFiles: m.contextFiles,
+      summarized: m.summarized ? m.summarized.batches : 0,
       coverage: r.coverage.ok ? "ok" : `FAIL(${r.coverage.missing.length}m/${r.coverage.duplicated.length}d/${r.coverage.extra.length}x)`,
       repairRounds: m.repairRounds,
       undeclaredViolations: m.undeclaredViolations,

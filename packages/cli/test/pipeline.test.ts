@@ -157,6 +157,37 @@ describe("runPipeline", () => {
   });
 });
 
+describe("staged ordering for large PRs", () => {
+  it("summarizes atoms first and orders from the summaries", async () => {
+    const { clamp, run, fmt } = await setup();
+    const provider = new MockProvider([
+      // One batch; the model skips `run`, which then gets a template line.
+      JSON.stringify({ summaries: [{ atomId: clamp, summary: "Adds `clamp`, which caps a value at 10." }, { atomId: "a_unknown", summary: "ignored" }] }),
+      plan([{ atomIds: [clamp], label: "Add clamp" }, { atomIds: [run], label: "Use clamp in run" }], [fmt]),
+      explainAll,
+    ]);
+    const events: string[] = [];
+    const r = await runPipeline(pr, { host, provider, summarizeAboveTokens: 1, onEvent: (e) => e.type === "summarize" && events.push(`${e.done}/${e.total}`) });
+    expect(r.metrics.summarized).toEqual({ batches: 1, missing: 1 });
+    expect(events).toEqual(["1/1"]);
+    expect(provider.requests[0].system).toContain("one or two plain sentences");
+    expect(provider.requests[0].messages[0].content).toContain("Math.min(v, 10)"); // the batch sees code
+    const orderPrompt = provider.requests[1].messages[0].content;
+    expect(orderPrompt).toContain("Adds `clamp`, which caps a value at 10.");
+    expect(orderPrompt).toContain("Change run.");
+    expect(orderPrompt).not.toContain("Math.min(v, 10)"); // the planner sees only summaries
+    expect(r.metrics.fallbackOrder).toBe(false);
+    expect(r.coverage.ok).toBe(true);
+  });
+
+  it("orders from code when the prompt is small enough", async () => {
+    const provider = new MockProvider([plan([], []), plan([], []), plan([], []), plan([], []), explainAll]);
+    const r = await runPipeline(pr, { host, provider });
+    expect(r.metrics.summarized).toBeNull();
+    expect(provider.requests[0].system).not.toContain("one or two plain sentences");
+  });
+});
+
 describe("explanation voice", () => {
   it("tells the model it is not the author and to write in the third person", () => {
     expect(EXPLAIN_SYSTEM).not.toMatch(/You wrote this pull request/);

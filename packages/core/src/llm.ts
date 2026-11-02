@@ -1,5 +1,11 @@
 import { extractJson } from "./validate";
-import type { CompletionRequest, JSONSchema, LLMProvider, Usage } from "./types";
+import type { CompletionRequest, JSONSchema, LLMProvider, PRInput, Usage } from "./types";
+
+/** The PR's title, description and linked issues, as the opening of a prompt. */
+export function prHeader(pr: PRInput): string {
+  const issues = (pr.issues ?? []).map((i) => `## Linked issue #${i.number}: ${i.title}\n\n${i.body.trim().slice(0, 2000) || "(no description)"}`);
+  return `# Pull request #${pr.number}: ${pr.title}\n\n${pr.body.trim() || "(no description)"}\n${issues.length ? `\n${issues.join("\n\n")}\n` : ""}`;
+}
 
 /** Rough token estimate (≈4 characters per token) for budgeting prompts. */
 export const estimateTokens = (s: string) => Math.ceil(s.length / 4);

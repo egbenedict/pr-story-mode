@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { isGeneratedPath, isLockfile, packForPath, parseUnifiedDiff, type PRFile, type PRInput } from "@prstory/core";
+import { isGeneratedPath, isLockfile, packForPath, parseUnifiedDiff, type ContextSource, type PRFile, type PRInput } from "@prstory/core";
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync("git", ["-C", repo, "-c", "core.quotepath=off", ...args], {
@@ -70,4 +70,89 @@ function parseLog(out: string) {
       const [sha, subject, body] = r.split("\x1f");
       return { sha, subject, body: body ?? "" };
     });
+}
+
+// ---------- context lookups outside the PR ----------
+
+const KEYWORD_DEF = /\b(?:def|class|function|interface|type|enum|struct|union|trait|fn|func|const|let|var|val|namespace|typedef|module|object|record|protocol)\s+(?:\([^)]*\)\s*)?(?:[\w$]+(?:::|\.))*([\w$]+)/g;
+const C_FUNC_DEF = /^[A-Za-z_][\w:<>,\s*&]*?[\s*&:]([A-Za-z_]\w*)\s*\(/; // unindented `int foo(`, `Foo::bar(`
+const JAVA_METHOD = /^\s+(?:(?:public|private|protected|static|final|abstract|synchronized|override|virtual|inline)\s+)+[\w<>\[\],\s]*?\s([A-Za-z_]\w*)\s*\(/;
+const MACRO_DEF = /^\s*#\s*define\s+([A-Za-z_]\w*)/;
+
+/** Symbol names that a source line defines, by rough language-agnostic patterns. */
+export function definedOnLine(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(KEYWORD_DEF)) out.push(m[1]);
+  for (const re of [C_FUNC_DEF, JAVA_METHOD, MACRO_DEF]) {
+    const m = re.exec(text);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
+/**
+ * Context lookups in a local clone at `sha`, with `git grep`: definitions are found by grepping
+ * for the names and keeping lines that look like they define one; references by whole-word match.
+ */
+export function localContextSource(repo: string, sha: string): ContextSource {
+  const run = (args: string[]): string => {
+    try {
+      return execFileSync("git", ["-C", repo, "-c", "core.quotepath=off", "grep", "-I", ...args, sha, "--"], {
+        encoding: "utf8",
+        maxBuffer: 256 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      return ""; // exit code 1 means no matches
+    }
+  };
+  const grep = (args: string[], symbols: string[]) => (symbols.length ? run(["-w", "-F", ...args, ...symbols.flatMap((s) => ["-e", s])]) : "");
+  const stripRev = (line: string) => line.slice(sha.length + 1); // "<sha>:path..." → "path..."
+  return {
+    async findDefinitions(symbols) {
+      const names = symbols.filter((s) => /^[A-Za-z_$][\w$]*$/.test(s));
+      const wanted = new Set(names);
+      const files = new Map<string, number>();
+      // Let git keep only lines shaped like a definition of one of the names (much less output than
+      // a plain word search for common names), then check each line properly.
+      let out = "";
+      for (let i = 0; i < names.length; i += 40) {
+        const alt = names.slice(i, i + 40).map((n) => n.replace(/\$/g, "\\$")).join("|");
+        const end = "([^[:alnum:]_$]|$)";
+        out += run([
+          "-n", "-E",
+          "-e", `(def|class|function|interface|type|enum|struct|union|trait|fn|func|const|let|var|val|namespace|typedef|module|object|record|define)[[:space:]]+(\\([^)]*\\)[[:space:]]*)?([[:alnum:]_$]+(::|\\.))*(${alt})${end}`,
+          "-e", `^[A-Za-z_][^=;(]*[^[:alnum:]_$](${alt})[[:space:]]*\\(`,
+          "-e", `^[[:space:]]+(public|private|protected|static|final|abstract|override|virtual|inline)[^=;(]*[^[:alnum:]_$](${alt})[[:space:]]*\\(`,
+        ]);
+      }
+      for (const raw of out.split("\n")) {
+        if (!raw) continue;
+        const m = /^(.*?):(\d+):(.*)$/.exec(stripRev(raw));
+        if (!m || m[3].length > 400) continue;
+        if (definedOnLine(m[3]).some((n) => wanted.has(n))) files.set(m[1], (files.get(m[1]) ?? 0) + 1);
+      }
+      return [...files.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+    },
+    async findReferences(symbols) {
+      return grep(["-l"], symbols).split("\n").filter(Boolean).map(stripRev).slice(0, 200);
+    },
+    async readFile(path) {
+      try {
+        return git(repo, "show", `${sha}:${path}`);
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}
+
+/** True when the clone has this commit (so it can serve context for a GitHub PR). */
+export function hasCommit(repo: string, sha: string): boolean {
+  try {
+    git(repo, "cat-file", "-e", `${sha}^{commit}`);
+    return true;
+  } catch {
+    return false;
+  }
 }

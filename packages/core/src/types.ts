@@ -43,6 +43,8 @@ export type PRInput = {
   baseSha: string; // merge base the diff is computed against
   headSha: string;
   files: PRFile[];
+  /** Issues the description says the PR fixes or closes. */
+  issues?: { number: number; title: string; body: string; url?: string }[];
 };
 
 export type MechanicalKind = "format" | "rename" | "imports" | "generated" | "lockfile";
@@ -62,7 +64,26 @@ export type ChangeAtom = {
   supportTier: 0 | 1 | 2;
 };
 
-export type Citation = { atomId: string; lines: [number, number] };
+/**
+ * A citation points at lines of a change atom (shown line numbers), or at lines of an unchanged
+ * context snippet (`file` set, head line numbers; `atomId` is then empty).
+ */
+export type Citation = { atomId: string; lines: [number, number]; file?: string };
+
+/**
+ * Unchanged code shown alongside a step: a definition the step uses, an existing caller of
+ * something the step changes, or the header of the class the step's code sits in.
+ * Line numbers are in the head version of the file; `code` holds those lines.
+ */
+export type ContextSnippet = {
+  file: string;
+  start: number;
+  end: number;
+  reason: "definition" | "caller" | "container";
+  symbol: string; // the symbol that links it to the step
+  within?: string; // for callers: the function the call sits in
+  code: string;
+};
 
 /**
  * One beat of a step's walkthrough: a few sentences, then the code they cover. `through` is the last
@@ -75,7 +96,7 @@ export type StoryStep = {
   atomIds: string[]; // usually one atom
   label: string; // short plain label for the outline
   orderOverride?: string; // reason for breaking dependency order
-  context?: { file: string; start: number; end: number }[]; // unchanged code shown alongside
+  context?: ContextSnippet[]; // unchanged code shown alongside
   explanation: Beat[];
 };
 

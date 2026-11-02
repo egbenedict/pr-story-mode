@@ -30,7 +30,7 @@ type Group = {
   headRange?: { start: number; end: number };
 };
 
-const STOP_NAMES = new Set([
+export const STOP_NAMES = new Set([
   "constructor", "__init__", "init", "main", "default", "index", "get", "set", "self", "this", "cls",
   "toString", "length", "value", "name", "id", "type", "data", "key", "args", "kwargs", "props", "result",
   "string", "number", "boolean", "any", "void", "true", "false", "null", "undefined", "None", "True", "False",
@@ -261,7 +261,7 @@ function childAt(node: Node, row: number): Node | null {
   return null;
 }
 
-function nameOf(node: Node): string | null {
+export function nameOf(node: Node): string | null {
   if (/^(assignment|augmented_assignment|assignment_expression)$/.test(node.type)) {
     const left = node.childForFieldName("left");
     if (left && /identifier|attribute|member_expression/.test(left.type)) return cleanName(left.text);
@@ -333,7 +333,7 @@ function cleanName(s: string): string {
   return s.replace(/^["'`]|["'`]$/g, "").replace(/\s+/g, " ").slice(0, 80);
 }
 
-function collectIdentifiers(node: Node, pack: LanguagePack, out: Set<string>) {
+export function collectIdentifiers(node: Node, pack: LanguagePack, out: Set<string>) {
   const stack: Node[] = [node];
   let visited = 0;
   while (stack.length && visited < 20000) {

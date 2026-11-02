@@ -1,7 +1,7 @@
-import { addUsage, completeJson, estimateTokens } from "./llm";
+import { addUsage, completeJson, estimateTokens, prHeader } from "./llm";
 import { fallbackLabel } from "./order";
 import { atomLabel, atomSnippet, lineCounts, rowNumber, snippetText, type SnippetRow } from "./snippet";
-import type { Beat, ChangeAtom, Citation, JSONSchema, LLMProvider, PRInput, StoryStep } from "./types";
+import type { Beat, ChangeAtom, Citation, ContextSnippet, JSONSchema, LLMProvider, PRInput, StoryStep } from "./types";
 import type { Plan } from "./validate";
 
 export const EXPLAIN_SYSTEM = `You have studied this pull request closely, and you are sitting next to a reviewer walking them through the code, one step at a time in a fixed order. You did not write the pull request: someone else did, and the reader knows that.
@@ -17,7 +17,8 @@ Voice: describe the changes in the third person. Make the code or the PR the sub
 - Lines marked \`~\` changed only in indentation. Say so briefly instead of explaining them again.
 - The first beat of a step follows from the step before; where the topic shifts, make that connection in its first sentence.
 - Write plain sentences: no headings, bullet lists or dramatic framing. Put identifiers, flags, file names and literal values in backticks.
-- \`cites\` lists the lines a beat discusses, as the atom ID with the first and last line number. Cite only atoms shown in this request.`;
+- \`cites\` lists the lines a beat discusses, as the atom ID with the first and last line number. Cite only atoms shown in this request.
+- Some steps come with unchanged code the PR did not touch, labeled C1, C2 and so on: a definition the step uses, an existing caller of something the step changes, or the class the code sits in. The reader sees it just above the step. Use it where it explains the change, for example what a called helper returns or which existing callers a new behavior reaches, and cite it with its label (\`atomId\` "C2") and its line numbers. Don't walk through the context itself, and never end a beat on a context line.`;
 
 export const EXPLAIN_SCHEMA: JSONSchema = {
   type: "object",
@@ -100,18 +101,24 @@ export async function explainSteps(
   plan: Plan,
   provider: LLMProvider | null,
   onStep?: (index: number, step: StoryStep) => void,
+  context: ContextSnippet[][] = [],
 ): Promise<{ steps: StoryStep[]; stats: ExplainStats }> {
   const byId = new Map(atoms.map((a) => [a.id, a]));
   const files = new Map(pr.files.map((f) => [f.path, f]));
   const snippets = new Map<string, SnippetRow[]>(atoms.map((a) => [a.id, atomSnippet(files.get(a.file), a)]));
   const stats: ExplainStats = { citations: 0, groundingFailures: 0, beats: 0, badCuts: 0, missingSteps: 0, tokens: 0, windows: 0 };
 
-  const steps: StoryStep[] = plan.steps.map((s) => ({
+  const steps: StoryStep[] = plan.steps.map((s, i) => ({
     atomIds: s.atomIds,
     label: s.label,
     ...(s.orderOverride ? { orderOverride: s.orderOverride } : {}),
+    ...(context[i]?.length ? { context: context[i] } : {}),
     explanation: [],
   }));
+
+  // Context snippets are labeled C1, C2, … across the whole story.
+  const ctxLabels: { label: string; step: number; snip: ContextSnippet }[] = [];
+  context.forEach((list, i) => list?.forEach((snip) => ctxLabels.push({ label: `C${ctxLabels.length + 1}`, step: i, snip })));
 
   if (!provider) {
     steps.forEach((s, i) => {
@@ -122,7 +129,7 @@ export async function explainSteps(
   }
 
   const outline = plan.steps.map((s, i) => `${i + 1}. ${s.label} [${s.atomIds.join(", ")}]`).join("\n");
-  const sharedPrefix = `# Pull request #${pr.number}: ${pr.title}\n\n${pr.body.trim() || "(no description)"}\n\n# Summary\n\n${plan.summary}\n\n# Full step order\n\n${outline}`;
+  const sharedPrefix = `${prHeader(pr)}\n# Summary\n\n${plan.summary}\n\n# Full step order\n\n${outline}`;
 
   const stepTexts = plan.steps.map((s, i) => {
     const parts = s.atomIds.map((id) => {
@@ -130,7 +137,8 @@ export async function explainSteps(
       const { add, del } = lineCounts(a);
       return `Atom ${id}: ${atomLabel(a)} (${a.kind}, +${add} −${del})\n\`\`\`\n${snippetText(snippets.get(id)!)}\n\`\`\``;
     });
-    return `## Step ${i + 1}: ${s.label}${s.orderOverride ? `\n(Placed before its dependencies on purpose: ${s.orderOverride})` : ""}\n\n${parts.join("\n\n")}`;
+    const ctx = ctxLabels.filter((c) => c.step === i).map(({ label, snip }) => `${label}: ${contextCaption(snip)}, \`${snip.file}\` lines ${snip.start}–${snip.end} (unchanged)\n\`\`\`\n${numbered(snip)}\n\`\`\``);
+    return `## Step ${i + 1}: ${s.label}${s.orderOverride ? `\n(Placed before its dependencies on purpose: ${s.orderOverride})` : ""}\n\n${parts.join("\n\n")}${ctx.length ? `\n\nUnchanged context for this step:\n\n${ctx.join("\n\n")}` : ""}`;
   });
 
   const budget = Math.max(2000, Math.floor(provider.capabilities.maxContextTokens * 0.3) - estimateTokens(sharedPrefix));
@@ -165,6 +173,7 @@ export async function explainSteps(
 
     const allowed = new Map<string, [number, number]>();
     for (const i of win) for (const id of plan.steps[i].atomIds) allowed.set(id, shownRange(snippets.get(id)!));
+    const ctxAllowed = new Map(ctxLabels.filter((c) => win.includes(c.step)).map((c) => [c.label, c.snip]));
 
     for (const i of win) {
       const beats = got.get(i);
@@ -188,8 +197,12 @@ export async function explainSteps(
             const { atomId, start, end } = c as { atomId?: unknown; start?: unknown; end?: unknown };
             stats.citations++;
             const range = typeof atomId === "string" ? allowed.get(atomId) : undefined;
-            if (range && typeof start === "number" && typeof end === "number" && start <= end && start >= range[0] && end <= range[1]) {
-              cites.push({ atomId: atomId as string, lines: [start, end] });
+            const snip = typeof atomId === "string" ? ctxAllowed.get(atomId) : undefined;
+            const ok = (lo: number, hi: number) => typeof start === "number" && typeof end === "number" && start <= end && start >= lo && end <= hi;
+            if (range && ok(range[0], range[1])) {
+              cites.push({ atomId: atomId as string, lines: [start as number, end as number] });
+            } else if (snip && ok(snip.start, snip.end)) {
+              cites.push({ atomId: "", file: snip.file, lines: [start as number, end as number] });
             } else {
               stats.groundingFailures++;
             }
@@ -202,6 +215,20 @@ export async function explainSteps(
   }
   stats.tokens = total.tokens;
   return { steps, stats };
+}
+
+/** "definition of `clamp`", "a caller of `run` (in `main`)", "the class `Scheduler`". */
+export function contextCaption(c: ContextSnippet): string {
+  if (c.reason === "definition") return `definition of \`${c.symbol}\``;
+  if (c.reason === "caller") return `existing use of \`${c.symbol}\`${c.within ? ` in \`${c.within}\`` : ""}`;
+  return `enclosing \`${c.symbol}\``;
+}
+
+function numbered(c: ContextSnippet): string {
+  return c.code
+    .split("\n")
+    .map((l, k) => `${String(c.start + k).padStart(5)}   ${l}`)
+    .join("\n");
 }
 
 function shownRange(rows: SnippetRow[]): [number, number] {

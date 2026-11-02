@@ -9,6 +9,13 @@ type Files = Record<string, string | null>; // null deletes the file
 
 /** Make a throwaway git repo with a base commit and a head commit, and load it as a PR. */
 export function makePR(base: Files, head: Files, meta: { title?: string; body?: string } = {}): PRInput {
+  const { pr, cleanup } = makeRepo(base, head, meta);
+  cleanup();
+  return pr;
+}
+
+/** Like makePR, but keeps the repository until `cleanup()` (for tests that read more of it). */
+export function makeRepo(base: Files, head: Files, meta: { title?: string; body?: string } = {}): { pr: PRInput; dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "prstory-test-"));
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { stdio: "pipe" });
@@ -21,9 +28,11 @@ export function makePR(base: Files, head: Files, meta: { title?: string; body?: 
     write(dir, head);
     git("add", "-A");
     git("commit", "-q", "--allow-empty", "-m", meta.title ?? "head");
-    return loadLocalPR(dir, "main", "feature", { title: meta.title ?? "Test PR", body: meta.body ?? "" });
-  } finally {
+    const pr = loadLocalPR(dir, "main", "feature", { title: meta.title ?? "Test PR", body: meta.body ?? "" });
+    return { pr, dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch (err) {
     rmSync(dir, { recursive: true, force: true });
+    throw err;
   }
 }
 

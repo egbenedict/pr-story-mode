@@ -1,15 +1,16 @@
 import { atomizePR } from "./atomize";
 import { classifyAtoms } from "./classify";
+import { retrieveContext, type ContextSource } from "./context";
 import { explainSteps } from "./explain";
 import { buildGraph, type Edge } from "./graph";
-import { orderAtoms } from "./order";
+import { orderAtoms, type OrderEvent } from "./order";
 import type { ParserHost } from "./parse";
 import type { ChangeAtom, LLMProvider, PRInput, Story, StoryStep, Usage } from "./types";
 import { checkCoverage, dependencyViolations, type CoverageReport } from "./validate";
 
 export type PipelineEvent =
-  | { type: "stage"; stage: "atomize" | "graph" | "order" | "explain" | "done" }
-  | { type: "order-attempt"; round: number; errors: string[] }
+  | { type: "stage"; stage: "atomize" | "graph" | "order" | "context" | "explain" | "done" }
+  | OrderEvent
   | { type: "step"; index: number; step: StoryStep };
 
 export type PipelineMetrics = {
@@ -25,6 +26,10 @@ export type PipelineMetrics = {
   orderErrors: string[];
   orderOverrides: number;
   undeclaredViolations: number;
+  summarized: { batches: number; missing: number } | null;
+  contextSnippets: number;
+  stepsWithContext: number;
+  contextFiles: number; // unchanged files read from outside the PR for context
   citations: number;
   groundingFailures: number;
   missingExplanations: number;
@@ -32,7 +37,7 @@ export type PipelineMetrics = {
   badCuts: number;
   tokens: number;
   usage: Required<Usage>;
-  ms: { atomize: number; order: number; explain: number; firstStep: number | null; total: number };
+  ms: { atomize: number; order: number; context: number; explain: number; firstStep: number | null; total: number };
 };
 
 export type PipelineResult = {
@@ -46,7 +51,16 @@ export type PipelineResult = {
 /** PR → atoms → graph → order (LLM, validated and repaired) → explanation (LLM) → Story. */
 export async function runPipeline(
   pr: PRInput,
-  opts: { host: ParserHost; provider: LLMProvider | null; onEvent?: (e: PipelineEvent) => void },
+  opts: {
+    host: ParserHost;
+    provider: LLMProvider | null;
+    onEvent?: (e: PipelineEvent) => void;
+    /** Where to look for unchanged code outside the PR's files (null: only the PR's files). */
+    contextSource?: ContextSource | null;
+    /** Turn off context retrieval entirely. */
+    noContext?: boolean;
+    summarizeAboveTokens?: number;
+  },
 ): Promise<PipelineResult> {
   const t0 = Date.now();
   const emit = opts.onEvent ?? (() => {});
@@ -61,15 +75,28 @@ export async function runPipeline(
   const edges = buildGraph(atoms);
 
   emit({ type: "stage", stage: "order" });
-  const order = await orderAtoms(pr, atoms, edges, provider, (e) => emit(e));
+  const order = await orderAtoms(pr, atoms, edges, provider, (e) => emit(e), { summarizeAboveTokens: opts.summarizeAboveTokens });
   const tOrder = Date.now();
+
+  emit({ type: "stage", stage: "context" });
+  const ctx = opts.noContext
+    ? { context: [], stats: { snippets: 0, stepsWithContext: 0, extraFiles: 0 } }
+    : await retrieveContext(pr, atoms, order.plan.steps, opts.host, { source: opts.contextSource });
+  const tContext = Date.now();
 
   emit({ type: "stage", stage: "explain" });
   let firstStep: number | null = null;
-  const { steps, stats } = await explainSteps(pr, atoms, order.plan, provider, (index, step) => {
-    firstStep ??= Date.now() - t0;
-    emit({ type: "step", index, step });
-  });
+  const { steps, stats } = await explainSteps(
+    pr,
+    atoms,
+    order.plan,
+    provider,
+    (index, step) => {
+      firstStep ??= Date.now() - t0;
+      emit({ type: "step", index, step });
+    },
+    ctx.context,
+  );
   const tExplain = Date.now();
 
   const story: Story = {
@@ -110,6 +137,10 @@ export async function runPipeline(
       orderErrors: order.errors,
       orderOverrides: steps.filter((s) => s.orderOverride).length,
       undeclaredViolations: dependencyViolations(order.plan, atoms, edges).length,
+      summarized: order.summarized,
+      contextSnippets: ctx.stats.snippets,
+      stepsWithContext: ctx.stats.stepsWithContext,
+      contextFiles: ctx.stats.extraFiles,
       citations: stats.citations,
       groundingFailures: stats.groundingFailures,
       missingExplanations: stats.missingSteps,
@@ -117,7 +148,7 @@ export async function runPipeline(
       badCuts: stats.badCuts,
       tokens: story.meta.tokens,
       usage,
-      ms: { atomize: tAtoms - t0, order: tOrder - tAtoms, explain: tExplain - tOrder, firstStep, total: Date.now() - t0 },
+      ms: { atomize: tAtoms - t0, order: tOrder - tAtoms, context: tContext - tOrder, explain: tExplain - tContext, firstStep, total: Date.now() - t0 },
     },
   };
 }

@@ -14,6 +14,24 @@ export function defaultApiBase(host: string): string {
   return host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`;
 }
 
+/**
+ * Issue numbers the description says the PR fixes, closes or resolves ("Fixes #12",
+ * "closes owner/repo#3", "Resolves https://github.com/owner/repo/issues/9"), same repository only.
+ */
+export function linkedIssueNumbers(body: string, owner: string, repo: string, max = 3): number[] {
+  const out: number[] = [];
+  const re = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+(?:https?:\/\/[^/\s]+\/([\w.-]+)\/([\w.-]+)\/issues\/|(?:([\w.-]+)\/([\w.-]+))?#)(\d+)/gi;
+  for (const m of body.matchAll(re)) {
+    const o = m[1] ?? m[3];
+    const r = m[2] ?? m[4];
+    if (o && (o.toLowerCase() !== owner.toLowerCase() || r!.toLowerCase() !== repo.toLowerCase())) continue;
+    const n = +m[5];
+    if (!out.includes(n)) out.push(n);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
 export type GitHubOptions = {
   token?: string;
   apiBase?: string; // GitHub Enterprise Server: https://ghe.example.com/api/v3
@@ -72,6 +90,17 @@ export async function fetchPullRequest(ref: PRRef, opts: GitHubOptions = {}): Pr
   }
   await runLimited(jobs, opts.concurrency ?? 6);
 
+  // Linked issues give the "why"; a failure here never blocks the story.
+  const issues: NonNullable<PRInput["issues"]> = [];
+  for (const n of linkedIssueNumbers(meta.body ?? "", ref.owner, ref.repo)) {
+    try {
+      const i = (await (await get(`${repoPath}/issues/${n}`)).json()) as { title: string; body: string | null; html_url: string; pull_request?: unknown };
+      if (!i.pull_request) issues.push({ number: n, title: i.title, body: i.body ?? "", url: i.html_url });
+    } catch {
+      // skip
+    }
+  }
+
   return {
     number: ref.number,
     title: meta.title,
@@ -81,6 +110,7 @@ export async function fetchPullRequest(ref: PRRef, opts: GitHubOptions = {}): Pr
     baseSha: mergeBase,
     headSha: meta.head.sha,
     files,
+    ...(issues.length ? { issues } : {}),
   };
 }
 
