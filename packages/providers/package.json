@@ -1,0 +1,11 @@
+{
+  "name": "@prstory/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@prstory/core": "0.1.0",
+    "@anthropic-ai/sdk": "^1.3.0"
+  }
+}

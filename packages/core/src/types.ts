@@ -1,0 +1,104 @@
+// Core data types. Kept free of browser and Node APIs so the pipeline runs anywhere.
+
+export type Side = "LEFT" | "RIGHT";
+
+/** One changed line of a diff: LEFT lines are removed (base line numbers), RIGHT lines are added (head line numbers). */
+export type DiffLineRef = { side: Side; line: number };
+
+export type HunkLine =
+  | { type: "context"; text: string; oldLine: number; newLine: number }
+  | { type: "del"; text: string; oldLine: number }
+  | { type: "add"; text: string; newLine: number };
+
+export type Hunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  header: string; // text after the second @@, often the enclosing function
+  lines: HunkLine[];
+};
+
+export type FileStatus = "added" | "removed" | "modified" | "renamed";
+
+export type FileDiff = {
+  path: string; // head path (base path for removed files)
+  oldPath: string; // base path (same as path unless renamed)
+  status: FileStatus;
+  binary: boolean;
+  hunks: Hunk[];
+};
+
+export type PRFile = FileDiff & {
+  baseText?: string; // full base file, when available
+  headText?: string; // full head file, when available
+};
+
+export type PRInput = {
+  number: number;
+  title: string;
+  body: string;
+  url?: string; // GitHub PR URL, used for links back to the Files view
+  repo?: string; // "owner/name"
+  baseSha: string; // merge base the diff is computed against
+  headSha: string;
+  files: PRFile[];
+};
+
+export type MechanicalKind = "format" | "rename" | "imports" | "generated" | "lockfile";
+
+export type ChangeAtom = {
+  id: string; // stable hash of file + symbol path + head SHA
+  file: string;
+  language: string | null;
+  symbolPath: string[]; // e.g. ["Scheduler", "replan"]
+  kind: "added" | "removed" | "modified" | "moved" | "renamed";
+  baseRange?: { start: number; end: number };
+  headRange?: { start: number; end: number };
+  hunkLines: DiffLineRef[]; // exact diff lines covered
+  mechanical?: MechanicalKind;
+  defines: string[]; // symbols defined or changed
+  references: string[]; // symbols used
+  supportTier: 0 | 1 | 2;
+};
+
+export type Citation = { atomId: string; lines: [number, number] };
+
+export type StoryStep = {
+  atomIds: string[]; // usually one atom
+  label: string; // short plain label for the outline
+  orderOverride?: string; // reason for breaking dependency order
+  context?: { file: string; start: number; end: number }[]; // unchanged code shown alongside
+  explanation: { text: string; cites: Citation[] }[];
+};
+
+export type Story = {
+  prNumber: number;
+  headSha: string;
+  summary: string; // two or three sentences shown at the top
+  steps: StoryStep[];
+  mechanical: string[]; // atom IDs, listed at the end
+  meta: { model: string; provider: string; repairRounds: number; tokens: number };
+};
+
+// ---- LLM provider interface (implemented in @prstory/providers) ----
+
+export type JSONSchema = Record<string, unknown>;
+export type Msg = { role: "user" | "assistant"; content: string };
+export type Usage = { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number };
+
+export type CompletionRequest = {
+  system: string;
+  /** Stable text placed before `messages` so providers with prompt caching can reuse it across calls. */
+  sharedPrefix?: string;
+  messages: Msg[];
+  schema?: JSONSchema;
+  maxTokens: number;
+};
+
+export interface LLMProvider {
+  id: string;
+  model: string;
+  capabilities: { jsonSchema: boolean; maxContextTokens: number; promptCaching: boolean };
+  complete(req: CompletionRequest): Promise<{ text: string; json?: unknown; usage: Usage }>;
+}

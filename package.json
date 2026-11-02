@@ -1,0 +1,21 @@
+{
+  "name": "pr-story-mode",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/providers",
+    "packages/cli"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "story": "tsx packages/cli/src/main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "5.9",
+    "vitest": "^3.2.7"
+  }
+}

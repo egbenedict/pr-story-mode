@@ -1,0 +1,281 @@
+import { atomLabel, atomSnippet, lineCounts, type ChangeAtom, type PRInput, type PipelineResult, type SnippetRow } from "@prstory/core";
+
+export type RenderOptions = {
+  /** Link to a line in GitHub's Files view, when the PR came from GitHub. */
+  githubLink?: (file: string, side: "LEFT" | "RIGHT", line: number) => string;
+  costUsd?: number | null;
+};
+
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+/** Escape, then turn `code` spans into <code>. */
+const prose = (s: string) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+
+/** Self-contained HTML preview of a story: summary, one continuous scroll of steps, outline rail. */
+export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: RenderOptions = {}): string {
+  const { story, atoms, coverage, metrics } = result;
+  const byId = new Map(atoms.map((a) => [a.id, a]));
+  const files = new Map(pr.files.map((f) => [f.path, f]));
+  const storageKey = `prstory:${pr.repo ?? "local"}:${story.headSha}`;
+
+  const diffTable = (atom: ChangeAtom, rows: SnippetRow[], cls = "") => {
+    const body = rows
+      .map((r) => {
+        if (r.type === "gap") return `<tr class="gap"><td colspan="3">⋯</td></tr>`;
+        const shown = r.type === "del" ? r.oldLine : r.newLine;
+        const sign = r.type === "add" ? "+" : r.type === "del" ? "−" : "";
+        return `<tr class="${r.type}" data-n="${shown}"><td class="ln">${r.type === "add" ? "" : (r.oldLine ?? "")}</td><td class="ln">${r.type === "del" ? "" : (r.newLine ?? "")}</td><td class="code"><span class="sign">${sign}</span>${esc(r.text) || " "}</td></tr>`;
+      })
+      .join("");
+    return `<table class="diff ${cls}" data-atom="${atom.id}">${body}</table>`;
+  };
+
+  const rawHunks = (atom: ChangeAtom) => {
+    const f = files.get(atom.file);
+    if (!f) return "";
+    const mine = new Set(atom.hunkLines.map((r) => `${r.side}${r.line}`));
+    const rows: SnippetRow[] = [];
+    for (const h of f.hunks) {
+      const hit = h.lines.some((l) => (l.type === "del" ? mine.has(`LEFT${l.oldLine}`) : l.type === "add" ? mine.has(`RIGHT${l.newLine}`) : false));
+      if (!hit) continue;
+      if (rows.length) rows.push({ type: "gap" });
+      for (const l of h.lines) rows.push({ ...l });
+    }
+    return diffTable(atom, rows, "raw");
+  };
+
+  const atomBlock = (atom: ChangeAtom) => {
+    const { add, del } = lineCounts(atom);
+    const first = atom.hunkLines.find((r) => r.side === "RIGHT") ?? atom.hunkLines[0];
+    const gh = opts.githubLink && first ? `<a class="gh" href="${esc(opts.githubLink(atom.file, first.side, first.line))}" target="_blank" rel="noopener">Open in Files view ↗</a>` : "";
+    const sym = atomLabel(atom).slice(atom.file.length).replace(/^ › /, "");
+    const rows = atomSnippet(files.get(atom.file), atom);
+    return `<div class="atom" id="atom-${atom.id}">
+  <div class="atom-head"><span class="path">${esc(atom.file)}</span>${sym ? `<span class="sym">${esc(sym)}</span>` : ""}<span class="counts"><span class="plus">+${add}</span> <span class="minus">−${del}</span></span>${gh}${rows.length ? `<button class="raw-toggle" type="button">Raw diff</button>` : ""}</div>
+  ${rows.length ? diffTable(atom, rows, "story") + rawHunks(atom) : `<p class="empty">${atom.kind === "renamed" ? "File renamed without content changes." : "Binary file changed."}</p>`}
+</div>`;
+  };
+
+  const contextBlock = (c: { file: string; start: number; end: number }) => {
+    const text = files.get(c.file)?.headText;
+    if (!text) return "";
+    const lines = text.split("\n").slice(c.start - 1, c.end);
+    const rows = lines.map((l, i) => `<tr><td class="ln"></td><td class="ln">${c.start + i}</td><td class="code">${esc(l) || " "}</td></tr>`).join("");
+    return `<div class="context"><div class="context-head">Unchanged · ${esc(c.file)} lines ${c.start}–${c.end}</div><table class="diff">${rows}</table></div>`;
+  };
+
+  const steps = story.steps
+    .map((s, i) => {
+      const paras = s.explanation
+        .map((p) => {
+          const cites = p.cites
+            .map((c) => `<a class="cite" href="#atom-${c.atomId}" data-atom="${c.atomId}" data-from="${c.lines[0]}" data-to="${c.lines[1]}">${c.lines[0] === c.lines[1] ? `L${c.lines[0]}` : `L${c.lines[0]}–${c.lines[1]}`}</a>`)
+            .join("");
+          return `<p>${prose(p.text)}${cites ? ` <span class="cites">${cites}</span>` : ""}</p>`;
+        })
+        .join("");
+      const override = s.orderOverride ? `<p class="override">Placed before code it depends on: ${prose(s.orderOverride)}</p>` : "";
+      const context = (s.context ?? []).map(contextBlock).join("");
+      return `<section class="step" id="step-${i + 1}" data-step="${i + 1}">
+  <div class="step-marker" aria-hidden="true">${i + 1}</div>
+  <div class="step-body">
+    <div class="explanation">${paras}${override}</div>
+    ${context}
+    ${s.atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a).map(atomBlock).join("")}
+  </div>
+</section>`;
+    })
+    .join("\n");
+
+  const mechAtoms = story.mechanical.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
+  const mechLines = mechAtoms.reduce((n, a) => n + a.hunkLines.length, 0);
+  const mechanical = mechAtoms.length
+    ? `<details class="mechanical" id="mechanical">
+  <summary>Mechanical changes <span class="muted">· ${mechAtoms.length} item${mechAtoms.length === 1 ? "" : "s"}, ${mechLines} line${mechLines === 1 ? "" : "s"}</span></summary>
+  <p class="muted">Formatting, renames, import reshuffles, lockfiles and generated files. Every line is here so nothing in the PR goes unseen.</p>
+  ${mechAtoms.map((a) => `<div class="mech-item"><span class="tag">${a.mechanical}</span>${atomBlock(a)}</div>`).join("")}
+</details>`
+    : "";
+
+  const outline = story.steps
+    .map((s, i) => `<li><input type="checkbox" data-step="${i + 1}" aria-label="Mark step ${i + 1} reviewed"><a href="#step-${i + 1}" data-step="${i + 1}"><span class="n">${i + 1}</span>${esc(s.label)}</a></li>`)
+    .join("");
+
+  const cost = opts.costUsd != null ? ` · ~$${opts.costUsd.toFixed(opts.costUsd < 1 ? 3 : 2)}` : "";
+  const prLink = pr.url ? `<a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo ?? "")}#${pr.number}</a>` : esc(pr.repo ?? "local diff");
+  const coverageText = coverage.ok
+    ? `All ${coverage.totalLines} changed lines are shown exactly once.`
+    : `Coverage check failed: ${coverage.missing.length} missing, ${coverage.duplicated.length} duplicated lines.`;
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR Story · ${esc(pr.title)}</title>
+<style>
+:root {
+  --bg: #fbfaf8; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e6e3dd; --accent: #c2410c;
+  --add-bg: #e9f6ec; --add-ink: #1a6b34; --del-bg: #fbeaea; --del-ink: #a12a2a; --ctx-bg: #f4f2ee; --code: #26251f;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161614; --panel: #1e1e1b; --ink: #ecebe6; --muted: #9b9a93; --line: #34332e; --accent: #fb923c;
+    --add-bg: #15301e; --add-ink: #7fd69a; --del-bg: #3a1a1a; --del-ink: #f2a0a0; --ctx-bg: #22221f; --code: #e3e2dc; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 var(--sans); }
+a { color: var(--accent); }
+code { font: 0.9em var(--mono); background: var(--ctx-bg); padding: 0.05em 0.3em; border-radius: 4px; }
+.layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); max-width: 1320px; margin: 0 auto; }
+.rail { position: sticky; top: 0; height: 100vh; overflow: auto; padding: 28px 16px 28px 20px; border-right: 1px solid var(--line); }
+.rail h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
+.progress { height: 4px; background: var(--line); border-radius: 2px; margin: 0 0 6px; overflow: hidden; }
+.progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+.progress-text { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+.rail ol { list-style: none; padding: 0; margin: 0; }
+.rail li { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; font-size: 13px; line-height: 1.4; }
+.rail li input { margin-top: 2px; accent-color: var(--accent); }
+.rail li a { color: var(--ink); text-decoration: none; display: flex; gap: 6px; }
+.rail li a .n { color: var(--muted); min-width: 1.6em; font-variant-numeric: tabular-nums; }
+.rail li a.current { color: var(--accent); font-weight: 600; }
+.rail li.done a { color: var(--muted); text-decoration: line-through; }
+main { padding: 36px 40px 80px; min-width: 0; }
+header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
+.sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+.summary { font-size: 17px; max-width: 72ch; margin: 0 0 36px; }
+.step { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 14px; margin-bottom: 40px; scroll-margin-top: 16px; }
+.step-marker { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--line); display: grid; place-items: center; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.step.done .step-marker { background: var(--accent); border-color: var(--accent); color: #fff; }
+.explanation { max-width: 72ch; }
+.explanation p { margin: 0 0 10px; }
+.cites { white-space: nowrap; }
+.cite { font: 11px var(--mono); text-decoration: none; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 2px; color: var(--muted); }
+.cite:hover { color: var(--accent); border-color: var(--accent); }
+.override { font-size: 13px; color: var(--muted); border-left: 2px solid var(--accent); padding-left: 10px; }
+.atom { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 12px 0 0; overflow: hidden; }
+.atom-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.atom-head .path { font-family: var(--mono); }
+.atom-head .sym { font-family: var(--mono); font-weight: 600; }
+.atom-head .sym::before { content: "› "; color: var(--muted); font-weight: 400; }
+.counts { font-family: var(--mono); font-size: 12px; }
+.plus { color: var(--add-ink); } .minus { color: var(--del-ink); }
+.gh { margin-left: auto; font-size: 12px; text-decoration: none; }
+.raw-toggle { font: 12px var(--sans); background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 4px; padding: 1px 8px; cursor: pointer; }
+.atom-head .gh + .raw-toggle { margin-left: 0; }
+.atom-head .counts + .raw-toggle { margin-left: auto; }
+.raw-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.diff { width: 100%; border-collapse: collapse; font: 12.5px/1.5 var(--mono); color: var(--code); tab-size: 4; }
+.diff.raw { display: none; }
+.atom.show-raw .diff.raw { display: table; }
+.atom.show-raw .diff.story { display: none; }
+.diff td { padding: 0 10px; vertical-align: top; }
+.diff .ln { width: 1%; min-width: 3.2em; text-align: right; color: var(--muted); user-select: none; font-size: 11.5px; opacity: .8; }
+.diff .code { white-space: pre-wrap; word-break: break-word; }
+.diff .sign { display: inline-block; width: 1.2em; user-select: none; }
+.diff tr.add { background: var(--add-bg); } .diff tr.add .sign { color: var(--add-ink); }
+.diff tr.del { background: var(--del-bg); } .diff tr.del .sign { color: var(--del-ink); }
+.diff tr.gap td { color: var(--muted); text-align: center; background: var(--ctx-bg); font-size: 11px; }
+.diff tr.hl td { box-shadow: inset 3px 0 0 var(--accent); }
+.diff tr.hl td.code { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.empty { margin: 0; padding: 10px 12px; color: var(--muted); font-size: 13px; }
+.context { margin-top: 12px; border: 1px dashed var(--line); border-radius: 8px; overflow: hidden; }
+.context-head { font-size: 12px; color: var(--muted); padding: 5px 12px; background: var(--ctx-bg); }
+.mechanical { margin: 48px 0 0 50px; border-top: 1px solid var(--line); padding-top: 16px; }
+.mechanical summary { cursor: pointer; font-weight: 600; }
+.mech-item { position: relative; }
+.tag { display: inline-block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: 14px; }
+.muted { color: var(--muted); font-weight: 400; }
+footer { margin: 48px 0 0 50px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
+@media (max-width: 860px) {
+  .layout { display: block; }
+  .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 16px; }
+  main { padding: 20px 16px 60px; }
+  .step { grid-template-columns: 1fr; gap: 6px; }
+  .mechanical, footer { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="rail" aria-label="Story outline">
+  <h2>Outline</h2>
+  <div class="progress"><div></div></div>
+  <div class="progress-text"></div>
+  <ol>${outline}${mechAtoms.length ? `<li><span style="width:13px"></span><a href="#mechanical"><span class="n">·</span>Mechanical changes</a></li>` : ""}</ol>
+</nav>
+<main>
+<header>
+  <h1>${esc(pr.title)}</h1>
+  <p class="sub">${prLink} · head ${esc(story.headSha.slice(0, 7))} · ${story.steps.length} steps · ${metrics.changedLines} changed lines</p>
+  <p class="summary">${prose(story.summary)}</p>
+</header>
+${steps}
+${mechanical}
+<footer>
+  ${esc(coverageText)}<br>
+  Generated with ${esc(story.meta.provider === "none" ? "no LLM (dependency order and template text)" : `${story.meta.provider} · ${story.meta.model}`)} · ${story.meta.tokens.toLocaleString()} tokens${cost} · ${story.meta.repairRounds} repair round${story.meta.repairRounds === 1 ? "" : "s"}${metrics.fallbackOrder && story.meta.provider !== "none" ? " · fell back to dependency order" : ""}
+</footer>
+</main>
+</div>
+<script>
+(() => {
+  const KEY = ${JSON.stringify(storageKey)};
+  let done = {};
+  try { done = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch {}
+  const boxes = [...document.querySelectorAll('.rail input[type=checkbox]')];
+  const total = boxes.length;
+  const paint = () => {
+    let n = 0;
+    for (const b of boxes) {
+      const s = b.dataset.step, on = !!done[s];
+      b.checked = on; if (on) n++;
+      b.closest('li').classList.toggle('done', on);
+      document.getElementById('step-' + s)?.classList.toggle('done', on);
+    }
+    document.querySelector('.progress > div').style.width = total ? (100 * n / total) + '%' : '0';
+    document.querySelector('.progress-text').textContent = n + ' of ' + total + ' steps reviewed';
+  };
+  for (const b of boxes) b.addEventListener('change', () => {
+    done[b.dataset.step] = b.checked;
+    try { localStorage.setItem(KEY, JSON.stringify(done)); } catch {}
+    paint();
+  });
+  paint();
+
+  for (const btn of document.querySelectorAll('.raw-toggle')) btn.addEventListener('click', () => {
+    const atom = btn.closest('.atom');
+    const on = atom.classList.toggle('show-raw');
+    btn.setAttribute('aria-pressed', on);
+  });
+
+  for (const c of document.querySelectorAll('.cite')) c.addEventListener('click', (e) => {
+    e.preventDefault();
+    const atom = document.getElementById('atom-' + c.dataset.atom);
+    if (!atom) return;
+    atom.classList.remove('show-raw');
+    const from = +c.dataset.from, to = +c.dataset.to;
+    document.querySelectorAll('tr.hl').forEach((r) => r.classList.remove('hl'));
+    let first = null;
+    for (const r of atom.querySelectorAll('.diff.story tr[data-n]')) {
+      const n = +r.dataset.n;
+      if (n >= from && n <= to) { r.classList.add('hl'); first ??= r; }
+    }
+    (first || atom).scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  const links = new Map([...document.querySelectorAll('.rail a[data-step]')].map((a) => [a.dataset.step, a]));
+  const io = new IntersectionObserver((entries) => {
+    for (const en of entries) if (en.isIntersecting) {
+      links.forEach((a) => a.classList.remove('current'));
+      links.get(en.target.dataset.step)?.classList.add('current');
+    }
+  }, { rootMargin: '-20% 0px -70% 0px' });
+  document.querySelectorAll('.step').forEach((s) => io.observe(s));
+})();
+</script>
+</body>
+</html>
+`;
+}
