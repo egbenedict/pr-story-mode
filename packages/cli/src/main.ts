@@ -28,7 +28,8 @@ Usage:
   pr-story story --repo <dir> --base <ref> --head <ref> Story for a local branch diff
   pr-story bench --repo <dir> [--count 20] [--mode merges|commits] [--min-lines 1] [--max-lines 100000]
                                                         Run the pipeline over recent merged PRs and check coverage
-  pr-story atoms --repo <dir> --base <ref> --head <ref> Print the change atoms and dependency edges
+  pr-story atoms <pr-url> | --repo <dir> --base <ref> --head <ref>
+                                                        Print the change atoms and dependency edges
 
 Options:
   --provider anthropic|openai|openai-compatible|none   LLM provider (default: anthropic if ANTHROPIC_API_KEY is set, else none)
@@ -69,7 +70,7 @@ async function main() {
 
   if (cmd === "story") return storyCmd(rest[0], values);
   if (cmd === "bench") return benchCmd(values);
-  if (cmd === "atoms") return atomsCmd(values);
+  if (cmd === "atoms") return atomsCmd(rest[0], values);
   console.error(`Unknown command "${cmd}".\n\n${USAGE}`);
   process.exitCode = 1;
 }
@@ -240,8 +241,8 @@ async function benchCmd(v: Values) {
   if (passed !== ran) process.exitCode = 2;
 }
 
-async function atomsCmd(v: Values) {
-  const pr = await loadInput(undefined, v);
+async function atomsCmd(target: string | undefined, v: Values) {
+  const pr = await loadInput(target, v);
   const atoms = classifyAtoms(pr, await atomizePR(pr, createHost()));
   const edges = buildGraph(atoms);
   for (const a of atoms) {

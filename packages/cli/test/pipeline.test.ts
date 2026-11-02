@@ -32,13 +32,25 @@ async function setup() {
 const plan = (steps: { atomIds: string[]; label: string; orderOverride?: string }[], mechanical: string[]) =>
   JSON.stringify({ summary: "Adds clamp and uses it.", steps: steps.map((s) => ({ orderOverride: "", ...s })), mechanical });
 
-/** Explanation response that cites the first shown line of each requested step's atoms. */
+/**
+ * Explanation response: for each requested step, two beats. The first cites the first shown line and
+ * ends there; the second cites a bogus atom and runs to the end. Also returns a cut outside the step.
+ */
 const explainAll = (req: CompletionRequest) => {
   const content = req.messages[0].content;
-  const steps = [...content.matchAll(/## Step (\d+):[\s\S]*?Atom (a\w+):[\s\S]*?```\n\s*(\d+)/g)].map((m) => ({
-    step: +m[1],
-    paragraphs: [{ text: `Step ${m[1]} explained.`, cites: [{ atomId: m[2], start: +m[3], end: +m[3] }, { atomId: "a_bogus", start: 1, end: 2 }] }],
-  }));
+  const steps = content.split(/^## Step /m).slice(1).map((block) => {
+    const step = +block.split(":")[0];
+    const atomId = /Atom (a\w+):/.exec(block)![1];
+    const nums = [...block.matchAll(/^\s+(\d+) [-+ ~] /gm)].map((m) => +m[1]);
+    return {
+      step,
+      beats: [
+        { text: `Step ${step} starts here.`, cites: [{ atomId, start: nums[0], end: nums[0] }], throughAtomId: atomId, throughLine: nums[0] },
+        { text: `Step ${step} continues.`, cites: [{ atomId: "a_bogus", start: 1, end: 2 }], throughAtomId: atomId, throughLine: nums[nums.length - 1] },
+        { text: "A cut that points nowhere.", cites: [], throughAtomId: "a_elsewhere", throughLine: 3 },
+      ],
+    };
+  });
   return JSON.stringify({ steps });
 };
 
@@ -83,7 +95,11 @@ describe("runPipeline", () => {
     expect(r.coverage.ok).toBe(true);
     expect(r.metrics.citations).toBe(4);
     expect(r.metrics.groundingFailures).toBe(2);
+    expect(r.metrics.beats).toBe(6);
+    expect(r.metrics.badCuts).toBe(2);
     expect(r.story.steps[0].explanation[0].cites).toHaveLength(1);
+    expect(r.story.steps[0].explanation[0].through).toBeDefined();
+    expect(r.story.steps[0].explanation[2].through).toBeUndefined();
     // The repair request carried the precise error back to the model.
     expect(provider.requests[1].messages.at(-1)!.content).toContain(`Atom ${clamp}`);
     // Explanation windows send the shared prefix separately so it can be cached.
@@ -120,5 +136,23 @@ describe("runPipeline", () => {
     expect(html).toContain("Clamp run() output");
     expect(html).toContain("Mechanical changes");
     expect(html).toContain(`All ${r.coverage.totalLines} changed lines are shown exactly once.`);
+  });
+
+  it("renders beats with their code, lists and code spans", async () => {
+    const { clamp, run, fmt } = await setup();
+    const provider = new MockProvider([
+      JSON.stringify({ summary: "Adds `clamp` and uses it in `run`.", steps: [{ atomIds: [clamp], label: "Add `clamp`", orderOverride: "" }, { atomIds: [run], label: "Use it", orderOverride: "" }], mechanical: [fmt] }),
+      (req: CompletionRequest) => explainAll(req).replace("Step 1 starts here.", "Two cases:\\n- low values\\n- high values"),
+    ]);
+    const r = await runPipeline(pr, { host, provider });
+    const html = renderStoryHtml(pr, r);
+    expect(html).toContain('<div class="summary"><p>Adds <code>clamp</code> and uses it in <code>run</code>.</p></div>');
+    expect(html).toContain("<ul><li>low values</li><li>high values</li></ul>");
+    expect(html).toContain('<span>Add <code>clamp</code></span>');
+    // Step 1's first beat is followed by the start of clamp's code, and the rest comes after beat 2.
+    const step1 = html.slice(html.indexOf('id="step-1"'), html.indexOf('id="step-2"'));
+    expect(step1.indexOf("high values")).toBeLessThan(step1.indexOf('class="atom chunk"'));
+    expect(step1.match(/class="atom chunk"/g)).toHaveLength(2);
+    expect(step1).toContain("continued");
   });
 });

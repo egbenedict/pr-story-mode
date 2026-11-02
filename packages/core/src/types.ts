@@ -64,12 +64,19 @@ export type ChangeAtom = {
 
 export type Citation = { atomId: string; lines: [number, number] };
 
+/**
+ * One beat of a step's walkthrough: a few sentences, then the code they cover. `through` is the last
+ * line the beat covers (atom and shown line number); the next beat continues after it.
+ * A beat without `through` is prose only.
+ */
+export type Beat = { text: string; cites: Citation[]; through?: { atomId: string; line: number } };
+
 export type StoryStep = {
   atomIds: string[]; // usually one atom
   label: string; // short plain label for the outline
   orderOverride?: string; // reason for breaking dependency order
   context?: { file: string; start: number; end: number }[]; // unchanged code shown alongside
-  explanation: { text: string; cites: Citation[] }[];
+  explanation: Beat[];
 };
 
 export type Story = {

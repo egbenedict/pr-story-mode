@@ -41,7 +41,8 @@ ingest → parse (tree-sitter) → atomize → classify + symbol graph → order
 - **Classify** (`classify.ts`): formatting-only edits, pure renames, import reshuffles, lockfiles and generated files are tagged mechanical. A rename must be consistent across the PR and introduce a new name, so swapped arguments are never hidden as "mechanical". Code removed in one place and added verbatim elsewhere is tagged as moved.
 - **Graph** (`graph.ts`): `A → B` when A defines a symbol that B references. Cycles are handled as strongly connected components.
 - **Order** (`order.ts`): the model returns a flat list of steps. `validatePlan` checks that every atom appears exactly once, no IDs are unknown, and no step comes before a dependency unless it declares an `orderOverride`. Errors are sent back for up to 3 repair rounds, then the pipeline falls back to pure dependency order.
-- **Explain** (`explain.ts`): steps are explained in windows sized to the context budget. The PR description and full step order go in a shared prefix, so prompt caching reuses them across windows. A grounding check drops citations that point outside the window's atoms.
+- **Explain** (`explain.ts`): steps are explained in windows sized to the context budget. The PR description and full step order go in a shared prefix, so prompt caching reuses them across windows. Each step is written as a series of **beats**, in the voice of the author walking a colleague through the code: a few sentences, then the 5 to 25 lines they describe. The model picks where each beat ends, and `walkthrough()` in `snippet.ts` cuts the code at those points. Every line still appears exactly once, and a bad cut point snaps to the nearest valid line. A grounding check drops citations that point outside the window's atoms.
+- **Re-indented code** (`snippet.ts`): removed and added lines that differ only in whitespace are paired in order. Runs of them collapse into one expandable "re-indented, otherwise unchanged" row, for example when old code moves into an `else` branch.
 - **Coverage guarantee** (`validate.ts → checkCoverage`): the union of `hunkLines` over all atoms in `steps` and `mechanical` must equal the set of changed lines in the diff, with no line or atom repeated. The CLI exits with code 2 if it ever fails.
 
 ### Language support
@@ -49,7 +50,7 @@ ingest → parse (tree-sitter) → atomize → classify + symbol graph → order
 | Tier | Languages | Atoms |
 |---|---|---|
 | 2 | TypeScript, TSX, JavaScript, Python | Hand-tuned boundaries (classes, methods, fields, top-level statements, `test("…")` calls) |
-| 1 | Go, Rust, Java, JSON | Generic node-type patterns; JSON gets one atom per top-level key |
+| 1 | C, C++, Go, Rust, Java, JSON | Generic node-type patterns. C/C++ also reads names through declarators and flag macros, and looks through `#if` regions and templates. JSON gets one atom per top-level key |
 | 0 | Everything else | One atom per hunk |
 
 A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `packages/cli/src/grammars.ts`.
@@ -63,7 +64,7 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ## Tests and benchmark
 
 ```bash
-npm test            # 22 tests: diff parsing, atomization (TS, Python, Go, JSON), classification, validation, repair loop, grounding
+npm test            # 31 tests: diff parsing, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding
 npm run typecheck
 ```
 
@@ -73,6 +74,7 @@ Phase 1 gate ("coverage holds on 20 real PRs"), run without an LLM:
 |---|---|---|---|
 | pallets/flask (last 20 merges) | 20 | Python | 20/20 |
 | sindresorhus/ky (last 20 commits ≥ 20 lines) | 20 | TypeScript | 20/20 |
+| luau-lang/luau (last 20 commits, 20 to 3,000 lines) | 20 | C++ | 20/20 |
 
 ## Not done yet (later phases)
 

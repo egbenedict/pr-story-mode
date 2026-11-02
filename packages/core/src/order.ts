@@ -14,8 +14,9 @@ Rules:
 - A step is usually one atom. Put a few atoms in one step only when they read best together, for example the same small edit repeated in several places, or a tiny helper and its single use.
 - Respect dependencies. "A → B" means atom A defines something atom B uses, so A's step must come no later than B's. If the story reads clearly better with B first (for example starting from the entry point a user calls), keep that order and set \`orderOverride\` on B's step to a short reason. Otherwise set \`orderOverride\` to an empty string.
 - Follow the logic of the change: data shapes and core definitions first, then the code that uses them, then wiring and configuration. Tests go right after the code they test, or at the end.
-- \`label\` is a short plain phrase for the outline, such as "Add retry to fetchTrail". No numbering.
-- \`summary\` is two or three plain sentences on what the PR does and why, shown at the top of the story.`;
+- \`label\` is a short plain phrase for the outline, such as "Add retry to \`fetchTrail\`". No numbering.
+- \`summary\` is two or three plain sentences on what the PR does and why, shown at the top of the story.
+- In \`summary\` and labels, put identifiers, flags, file names and literal values in backticks.`;
 
 export const ORDER_SCHEMA: JSONSchema = {
   type: "object",

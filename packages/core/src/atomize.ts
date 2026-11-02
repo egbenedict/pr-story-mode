@@ -159,7 +159,7 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
     const defines: string[] = [];
     if (g.named && !g.isImport) {
       const last = g.path[g.path.length - 1];
-      if (last && /^[\w$.#]+$/.test(last)) defines.push(last.replace(/^.*\./, ""));
+      if (last && /^[\w$.#:~]+$/.test(last)) defines.push(last.replace(/^.*(\.|::)/, ""));
     }
     const refs = new Set<string>();
     if (pack && tier > 0) {
@@ -269,6 +269,10 @@ function nameOf(node: Node): string | null {
   const direct = node.childForFieldName("name") ?? node.childForFieldName("key");
   if (direct) return cleanName(direct.text);
 
+  // C/C++: the name sits under one or more declarators, e.g. `static int *f(int x)` or `Foo::bar() const`.
+  const declName = declaratorName(node);
+  if (declName) return declName;
+
   // test("does X", ...), it(...), describe(...), app.get("/path", ...): name by callee and first string.
   const call = /^(call_expression|call)$/.test(node.type)
     ? node
@@ -279,6 +283,8 @@ function nameOf(node: Node): string | null {
     const inner = call.type === "await_expression" ? call.namedChildren[0] : call;
     const fn = inner?.childForFieldName("function");
     const first = inner?.childForFieldName("arguments")?.namedChildren[0];
+    // C/C++ macros such as LUAU_FASTFLAGVARIABLE(Name, false) or DEFINE_FLAG(name): they define their first argument.
+    if (fn && /^[A-Z][A-Z0-9_]{2,}$/.test(fn.text) && first && /identifier$/.test(first.type)) return cleanName(first.text);
     if (fn && fn.text.length <= 40 && first && /string/.test(first.type)) {
       const q = first.text[0];
       const body = first.text.slice(1, -1).replace(/\s+/g, " ");
@@ -313,6 +319,16 @@ function nameOf(node: Node): string | null {
   return null;
 }
 
+function declaratorName(node: Node): string | null {
+  let d = node.childForFieldName("declarator");
+  for (let depth = 0; d && depth < 8; depth++) {
+    if (/identifier$|^qualified_identifier$|^destructor_name$|^operator_name$/.test(d.type)) return cleanName(d.text);
+    // `int x = 1;` has an init_declarator whose own declarator is the name.
+    d = d.childForFieldName("declarator") ?? d.namedChildren.find((c) => c && /declarator$|identifier$/.test(c.type)) ?? null;
+  }
+  return null;
+}
+
 function cleanName(s: string): string {
   return s.replace(/^["'`]|["'`]$/g, "").replace(/\s+/g, " ").slice(0, 80);
 }
@@ -325,7 +341,8 @@ function collectIdentifiers(node: Node, pack: LanguagePack, out: Set<string>) {
     visited++;
     if (pack.isIdentifier(n.type)) {
       out.add(n.text);
-      continue;
+      // Look inside `Ns::name` / `crate::name` so the bare name is found too.
+      if (!/qualified|scoped/.test(n.type)) continue;
     }
     for (const c of n.namedChildren) if (c) stack.push(c);
   }

@@ -208,3 +208,37 @@ describe("other tiers", () => {
     expectFullCoverage(pr, atoms);
   });
 });
+
+describe("C and C++", () => {
+  it("names functions through declarators, methods, namespaces and flag macros", async () => {
+    const base = `#include <string.h>
+
+LUAU_FASTFLAGVARIABLE(LuauFastSplit)
+
+namespace luau {
+struct Splitter {
+    int count(const char* s) const;
+};
+
+int Splitter::count(const char* s) const {
+    return (int)strlen(s);
+}
+}
+
+static int str_split(lua_State* L) {
+    return 0;
+}
+`;
+    const head = base
+      .replace("LUAU_FASTFLAGVARIABLE(LuauFastSplit)", "LUAU_FASTFLAGVARIABLE(LuauFastSplit)\nLUAU_FASTFLAGVARIABLE(LuauFasterSplit)")
+      .replace("return (int)strlen(s);", "return s ? (int)strlen(s) : 0;")
+      .replace("    return 0;\n}", "    if (FFlag::LuauFasterSplit)\n        return 1;\n    return 0;\n}");
+    const pr = makePR({ "split.cpp": base }, { "split.cpp": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["split.cpp:LuauFasterSplit", "split.cpp:luau.Splitter::count", "split.cpp:str_split"]);
+    expect(atoms.every((a) => a.supportTier === 1)).toBe(true);
+    const edges = buildGraph(atoms);
+    expect(edges.map((e) => e.symbol)).toContain("LuauFasterSplit");
+    expectFullCoverage(pr, atoms);
+  });
+});

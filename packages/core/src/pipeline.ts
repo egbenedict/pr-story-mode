@@ -28,6 +28,8 @@ export type PipelineMetrics = {
   citations: number;
   groundingFailures: number;
   missingExplanations: number;
+  beats: number;
+  badCuts: number;
   tokens: number;
   usage: Required<Usage>;
   ms: { atomize: number; order: number; explain: number; firstStep: number | null; total: number };
@@ -111,6 +113,8 @@ export async function runPipeline(
       citations: stats.citations,
       groundingFailures: stats.groundingFailures,
       missingExplanations: stats.missingSteps,
+      beats: stats.beats,
+      badCuts: stats.badCuts,
       tokens: story.meta.tokens,
       usage,
       ms: { atomize: tAtoms - t0, order: tOrder - tAtoms, explain: tExplain - tOrder, firstStep, total: Date.now() - t0 },

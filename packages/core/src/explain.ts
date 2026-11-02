@@ -1,15 +1,21 @@
 import { addUsage, completeJson, estimateTokens } from "./llm";
 import { fallbackLabel } from "./order";
-import { atomLabel, atomSnippet, lineCounts, snippetText, type SnippetRow } from "./snippet";
-import type { ChangeAtom, Citation, JSONSchema, LLMProvider, PRInput, StoryStep } from "./types";
+import { atomLabel, atomSnippet, lineCounts, rowNumber, snippetText, type SnippetRow } from "./snippet";
+import type { Beat, ChangeAtom, Citation, JSONSchema, LLMProvider, PRInput, StoryStep } from "./types";
 import type { Plan } from "./validate";
 
-export const EXPLAIN_SYSTEM = `You walk a colleague through a pull request, one step at a time, in a fixed order. For each step you are given, write a short, plain explanation of what changed and why: usually one or two short paragraphs, never more than three.
+export const EXPLAIN_SYSTEM = `You wrote this pull request, and you are sitting next to a colleague walking them through the code, one step at a time in a fixed order.
 
-- Write each step so it follows from the one before. Where the topic shifts, make the first sentence connect it to what came earlier.
-- No headings, titles, bullet lists or dramatic framing. Sound like a knowledgeable colleague: specific, calm and brief.
-- Point out what a reviewer should check closely, such as edge cases, behavior changes or risky assumptions, but do not invent problems.
-- Every paragraph cites the lines it talks about. A citation gives the atom ID and the first and last line numbers as shown at the left of that atom's snippet. Cite only atoms shown in this request.`;
+Explain each step as a sequence of short beats. A beat is one to three sentences followed by the lines of code they talk about: the reader sees your words, then exactly those lines, then your next beat.
+
+- Go through each step's snippet from top to bottom. If a step has several atoms, take them in the order shown.
+- End each beat at the last line it covers by setting \`throughAtomId\` and \`throughLine\` (the number at the left of that line). The next beat picks up on the following line. Aim for about 5 to 25 lines per beat, splitting long code at natural boundaries such as a new branch, a loop, or a call to a helper. A short step can be a single beat.
+- The last beat of a step runs to the end of its snippet. Leave \`throughAtomId\` empty and \`throughLine\` 0 only for a beat that needs no code, such as a sentence linking to the previous step.
+- Say what the code does and why, the way the author would: name the variables and calls involved, and point out edge cases, behavior changes and anything a reviewer should check. Do not invent problems.
+- Lines marked \`~\` changed only in indentation. Say so briefly instead of explaining them again.
+- The first beat of a step follows from the step before; where the topic shifts, make that connection in its first sentence.
+- Write plain sentences: no headings, bullet lists or dramatic framing. Put identifiers, flags, file names and literal values in backticks.
+- \`cites\` lists the lines a beat discusses, as the atom ID with the first and last line number. Cite only atoms shown in this request.`;
 
 export const EXPLAIN_SCHEMA: JSONSchema = {
   type: "object",
@@ -21,15 +27,15 @@ export const EXPLAIN_SCHEMA: JSONSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["step", "paragraphs"],
+        required: ["step", "beats"],
         properties: {
           step: { type: "integer" },
-          paragraphs: {
+          beats: {
             type: "array",
             items: {
               type: "object",
               additionalProperties: false,
-              required: ["text", "cites"],
+              required: ["text", "cites", "throughAtomId", "throughLine"],
               properties: {
                 text: { type: "string" },
                 cites: {
@@ -41,6 +47,8 @@ export const EXPLAIN_SCHEMA: JSONSchema = {
                     properties: { atomId: { type: "string" }, start: { type: "integer" }, end: { type: "integer" } },
                   },
                 },
+                throughAtomId: { type: "string" },
+                throughLine: { type: "integer" },
               },
             },
           },
@@ -50,10 +58,18 @@ export const EXPLAIN_SCHEMA: JSONSchema = {
   },
 };
 
-export type ExplainStats = { citations: number; groundingFailures: number; missingSteps: number; tokens: number; windows: number };
+export type ExplainStats = {
+  citations: number;
+  groundingFailures: number;
+  beats: number;
+  badCuts: number; // beat cut points outside the step's atoms or shown lines (the beat keeps its text)
+  missingSteps: number;
+  tokens: number;
+  windows: number;
+};
 
 /** Split steps into windows of consecutive steps that fit the context budget. */
-export function windows(stepTexts: string[], budgetTokens: number, maxSteps = 8): number[][] {
+export function windows(stepTexts: string[], budgetTokens: number, maxSteps = 6): number[][] {
   const out: number[][] = [];
   let cur: number[] = [];
   let used = 0;
@@ -86,7 +102,7 @@ export async function explainSteps(
   const byId = new Map(atoms.map((a) => [a.id, a]));
   const files = new Map(pr.files.map((f) => [f.path, f]));
   const snippets = new Map<string, SnippetRow[]>(atoms.map((a) => [a.id, atomSnippet(files.get(a.file), a)]));
-  const stats: ExplainStats = { citations: 0, groundingFailures: 0, missingSteps: 0, tokens: 0, windows: 0 };
+  const stats: ExplainStats = { citations: 0, groundingFailures: 0, beats: 0, badCuts: 0, missingSteps: 0, tokens: 0, windows: 0 };
 
   const steps: StoryStep[] = plan.steps.map((s) => ({
     atomIds: s.atomIds,
@@ -141,21 +157,30 @@ export async function explainSteps(
     const arr = (json as { steps?: unknown[] } | undefined)?.steps;
     if (Array.isArray(arr))
       for (const s of arr) {
-        const o = s as { step?: unknown; paragraphs?: unknown };
-        if (typeof o.step === "number" && Array.isArray(o.paragraphs)) got.set(o.step - 1, o.paragraphs);
+        const o = s as { step?: unknown; beats?: unknown };
+        if (typeof o.step === "number" && Array.isArray(o.beats)) got.set(o.step - 1, o.beats);
       }
 
     const allowed = new Map<string, [number, number]>();
     for (const i of win) for (const id of plan.steps[i].atomIds) allowed.set(id, shownRange(snippets.get(id)!));
 
     for (const i of win) {
-      const paragraphs = got.get(i);
-      if (!paragraphs?.length) {
+      const beats = got.get(i);
+      if (!beats?.length) {
         stats.missingSteps++;
         steps[i].explanation = [templateExplanation(steps[i].atomIds.map((id) => byId.get(id)!))];
       } else {
-        steps[i].explanation = paragraphs.map((p) => {
-          const o = p as { text?: unknown; cites?: unknown };
+        const inStep = new Set(steps[i].atomIds);
+        steps[i].explanation = beats.map((p) => {
+          const o = p as { text?: unknown; cites?: unknown; throughAtomId?: unknown; throughLine?: unknown };
+          stats.beats++;
+          let through: Beat["through"];
+          if (typeof o.throughAtomId === "string" && o.throughAtomId) {
+            const range = inStep.has(o.throughAtomId) ? allowed.get(o.throughAtomId) : undefined;
+            const line = o.throughLine;
+            if (range && typeof line === "number" && line >= range[0] && line <= range[1]) through = { atomId: o.throughAtomId, line };
+            else stats.badCuts++;
+          }
           const cites: Citation[] = [];
           for (const c of Array.isArray(o.cites) ? o.cites : []) {
             const { atomId, start, end } = c as { atomId?: unknown; start?: unknown; end?: unknown };
@@ -167,7 +192,7 @@ export async function explainSteps(
               stats.groundingFailures++;
             }
           }
-          return { text: typeof o.text === "string" ? o.text : "", cites };
+          return { text: typeof o.text === "string" ? o.text : "", cites, ...(through ? { through } : {}) };
         });
       }
       onStep?.(i, steps[i]);
@@ -182,7 +207,7 @@ function shownRange(rows: SnippetRow[]): [number, number] {
   let hi = -Infinity;
   for (const r of rows) {
     if (r.type === "gap") continue;
-    for (const n of [r.oldLine, r.newLine]) {
+    for (const n of [rowNumber(r), r.type === "reindent" ? r.oldLine : undefined]) {
       if (n === undefined) continue;
       lo = Math.min(lo, n);
       hi = Math.max(hi, n);

@@ -10,6 +10,8 @@ const GRAMMARS: Record<string, string> = {
   javascript: "tree-sitter-javascript/tree-sitter-javascript.wasm",
   python: "tree-sitter-python/tree-sitter-python.wasm",
   json: "tree-sitter-json/tree-sitter-json.wasm",
+  c: "tree-sitter-c/tree-sitter-c.wasm",
+  cpp: "tree-sitter-cpp/tree-sitter-cpp.wasm",
   go: "tree-sitter-go/tree-sitter-go.wasm",
   rust: "tree-sitter-rust/tree-sitter-rust.wasm",
   java: "tree-sitter-java/tree-sitter-java.wasm",

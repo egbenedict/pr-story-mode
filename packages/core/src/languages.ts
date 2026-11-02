@@ -89,6 +89,24 @@ function genericPack(id: string, grammar: string, extensions: string[]): Languag
   };
 }
 
+/** C and C++: generic patterns, plus looking through templates, extern "C" blocks and #if regions (include guards). */
+function cFamily(id: string, grammar: string, extensions: string[]): LanguagePack {
+  const g = genericPack(id, grammar, extensions);
+  const wrappers = new Set(["template_declaration", "linkage_specification", "declaration_list", "preproc_if", "preproc_ifdef", "preproc_else", "preproc_elif", "preproc_elifdef"]);
+  return {
+    ...g,
+    isClassLike: (t) => /^(class|struct|union|enum)_specifier$|^namespace_definition$/.test(t),
+    isBody: (t) => t === "field_declaration_list" || t === "declaration_list" || t === "enumerator_list",
+    isFunctionLike: (t) => t === "function_definition",
+    isWrapper: (t) => wrappers.has(t),
+    isImport: (t) => t === "preproc_include" || t === "using_declaration",
+    isLeading: (t) => t === "comment",
+  };
+}
+
+export const C = cFamily("c", "c", [".c"]);
+export const CPP = cFamily("cpp", "cpp", [".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".inl", ".ipp"]);
+
 export const GO = genericPack("go", "go", [".go"]);
 export const RUST = genericPack("rust", "rust", [".rs"]);
 export const JAVA = genericPack("java", "java", [".java"]);
@@ -108,7 +126,7 @@ export const JSON_PACK: LanguagePack = {
   isIdentifier: () => false,
 };
 
-export const LANGUAGE_PACKS: LanguagePack[] = [TYPESCRIPT, TSX, JAVASCRIPT, PYTHON, GO, RUST, JAVA, JSON_PACK];
+export const LANGUAGE_PACKS: LanguagePack[] = [TYPESCRIPT, TSX, JAVASCRIPT, PYTHON, C, CPP, GO, RUST, JAVA, JSON_PACK];
 
 /** Lockfiles and generated files never need a grammar: they go straight to the mechanical list. */
 const LOCKFILES = new Set([

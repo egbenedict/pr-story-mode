@@ -1,4 +1,16 @@
-import { atomLabel, atomSnippet, lineCounts, type ChangeAtom, type PRInput, type PipelineResult, type SnippetRow } from "@prstory/core";
+import {
+  atomLabel,
+  atomSnippet,
+  lineCounts,
+  reindentRuns,
+  walkthrough,
+  type ChangeAtom,
+  type Citation,
+  type PRInput,
+  type PipelineResult,
+  type SnippetRow,
+  type WalkChunk,
+} from "@prstory/core";
 
 export type RenderOptions = {
   /** Link to a line in GitHub's Files view, when the PR came from GitHub. */
@@ -9,25 +21,87 @@ export type RenderOptions = {
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** Escape, then turn `code` spans into <code>. */
-const prose = (s: string) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+const inline = (s: string) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
+
+/** Model text → paragraphs, with "- item" lines rendered as a list. `tail` is appended to the last block. */
+function blocks(text: string, tail = ""): string {
+  const out: string[] = [];
+  let para: string[] = [];
+  let list: string[] = [];
+  const flushPara = () => {
+    if (para.length) out.push(`<p>${inline(para.join(" "))}</p>`);
+    para = [];
+  };
+  const flushList = () => {
+    if (list.length) out.push(`<ul>${list.map((li) => `<li>${inline(li)}</li>`).join("")}</ul>`);
+    list = [];
+  };
+  for (const raw of text.split("\n")) {
+    const line = raw.trim();
+    const item = /^[-*•]\s+(.*)$/.exec(line);
+    if (item) {
+      flushPara();
+      list.push(item[1]);
+    } else if (!line) {
+      flushPara();
+      flushList();
+    } else {
+      flushList();
+      para.push(line);
+    }
+  }
+  flushPara();
+  flushList();
+  if (!out.length) return tail ? `<p>${tail}</p>` : "";
+  if (tail) {
+    const last = out[out.length - 1];
+    out[out.length - 1] = last.endsWith("</p>") ? `${last.slice(0, -4)} ${tail}</p>` : `${last}<p>${tail}</p>`;
+  }
+  return out.join("");
+}
+
+const FOLD_MIN = 4; // re-indented runs at least this long collapse into one row
 
 /** Self-contained HTML preview of a story: summary, one continuous scroll of steps, outline rail. */
 export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: RenderOptions = {}): string {
   const { story, atoms, coverage, metrics } = result;
   const byId = new Map(atoms.map((a) => [a.id, a]));
   const files = new Map(pr.files.map((f) => [f.path, f]));
+  const snippets = new Map<string, SnippetRow[]>(atoms.map((a) => [a.id, atomSnippet(files.get(a.file), a)]));
   const storageKey = `prstory:${pr.repo ?? "local"}:${story.headSha}`;
 
-  const diffTable = (atom: ChangeAtom, rows: SnippetRow[], cls = "") => {
-    const body = rows
-      .map((r) => {
-        if (r.type === "gap") return `<tr class="gap"><td colspan="3">⋯</td></tr>`;
-        const shown = r.type === "del" ? r.oldLine : r.newLine;
-        const sign = r.type === "add" ? "+" : r.type === "del" ? "−" : "";
-        return `<tr class="${r.type}" data-n="${shown}"><td class="ln">${r.type === "add" ? "" : (r.oldLine ?? "")}</td><td class="ln">${r.type === "del" ? "" : (r.newLine ?? "")}</td><td class="code"><span class="sign">${sign}</span>${esc(r.text) || " "}</td></tr>`;
-      })
-      .join("");
-    return `<table class="diff ${cls}" data-atom="${atom.id}">${body}</table>`;
+  const row = (r: SnippetRow) => {
+    if (r.type === "gap") return `<tr class="gap"><td colspan="3">⋯</td></tr>`;
+    const shown = r.type === "del" ? r.oldLine : r.newLine;
+    const sign = r.type === "add" ? "+" : r.type === "del" ? "−" : r.type === "reindent" ? "~" : "";
+    const old = r.type === "add" ? "" : (r.oldLine ?? "");
+    const neu = r.type === "del" ? "" : (r.newLine ?? "");
+    const o = r.type === "reindent" ? ` data-o="${r.oldLine}"` : "";
+    return `<tr class="${r.type}" data-n="${shown}"${o}><td class="ln">${old}</td><td class="ln">${neu}</td><td class="code"><span class="sign">${sign}</span>${esc(r.text) || " "}</td></tr>`;
+  };
+
+  const diffTable = (atomId: string, rows: SnippetRow[], cls = "") => {
+    const parts: string[] = [];
+    let plain: string[] = [];
+    const flush = () => {
+      if (plain.length) parts.push(`<tbody>${plain.join("")}</tbody>`);
+      plain = [];
+    };
+    const runs = new Map(reindentRuns(rows, FOLD_MIN).map(([a, b, c]) => [a, [b, c]]));
+    for (let i = 0; i < rows.length; i++) {
+      const run = runs.get(i);
+      if (run) {
+        const [end, n] = run;
+        flush();
+        parts.push(
+          `<tbody class="fold-toggle"><tr><td colspan="3"><button type="button" class="fold-btn" aria-expanded="false">~ ${n} lines re-indented, otherwise unchanged · show</button></td></tr></tbody>`,
+          `<tbody class="fold-body">${rows.slice(i, end + 1).map(row).join("")}</tbody>`,
+        );
+        i = end;
+      } else plain.push(row(rows[i]));
+    }
+    flush();
+    return `<table class="diff ${cls}" data-atom="${atomId}">${parts.join("")}</table>`;
   };
 
   const rawHunks = (atom: ChangeAtom) => {
@@ -41,20 +115,42 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
       if (rows.length) rows.push({ type: "gap" });
       for (const l of h.lines) rows.push({ ...l });
     }
-    return diffTable(atom, rows, "raw");
+    return diffTable(atom.id, rows, "raw");
   };
 
-  const atomBlock = (atom: ChangeAtom) => {
+  const atomHead = (atom: ChangeAtom, continued: boolean, extra = "") => {
+    const sym = atomLabel(atom).slice(atom.file.length).replace(/^ › /, "");
+    if (continued) {
+      return `<div class="atom-head cont"><span class="path">${esc(atom.file)}</span>${sym ? `<span class="sym">${esc(sym)}</span>` : ""}<span class="muted">continued</span></div>`;
+    }
     const { add, del } = lineCounts(atom);
     const first = atom.hunkLines.find((r) => r.side === "RIGHT") ?? atom.hunkLines[0];
     const gh = opts.githubLink && first ? `<a class="gh" href="${esc(opts.githubLink(atom.file, first.side, first.line))}" target="_blank" rel="noopener">Open in Files view ↗</a>` : "";
-    const sym = atomLabel(atom).slice(atom.file.length).replace(/^ › /, "");
-    const rows = atomSnippet(files.get(atom.file), atom);
+    return `<div class="atom-head"><span class="path">${esc(atom.file)}</span>${sym ? `<span class="sym">${esc(sym)}</span>` : ""}<span class="counts"><span class="plus">+${add}</span> <span class="minus">−${del}</span></span>${gh}${extra}</div>`;
+  };
+
+  const emptyNote = (atom: ChangeAtom) => `<p class="empty">${atom.kind === "renamed" ? "File renamed without content changes." : "Binary file changed."}</p>`;
+
+  /** A whole atom with its own raw-diff toggle (mechanical list and raw view). */
+  const atomBlock = (atom: ChangeAtom, withToggle = true) => {
+    const rows = snippets.get(atom.id) ?? [];
+    const toggle = withToggle && rows.length ? `<button class="raw-toggle" type="button">Raw diff</button>` : "";
     return `<div class="atom" id="atom-${atom.id}">
-  <div class="atom-head"><span class="path">${esc(atom.file)}</span>${sym ? `<span class="sym">${esc(sym)}</span>` : ""}<span class="counts"><span class="plus">+${add}</span> <span class="minus">−${del}</span></span>${gh}${rows.length ? `<button class="raw-toggle" type="button">Raw diff</button>` : ""}</div>
-  ${rows.length ? diffTable(atom, rows, "story") + rawHunks(atom) : `<p class="empty">${atom.kind === "renamed" ? "File renamed without content changes." : "Binary file changed."}</p>`}
+  ${atomHead(atom, false, toggle)}
+  ${rows.length ? diffTable(atom.id, rows, "story") + (withToggle ? rawHunks(atom) : "") : emptyNote(atom)}
 </div>`;
   };
+
+  const chunkBlock = (c: WalkChunk) => {
+    const atom = byId.get(c.atomId);
+    if (!atom) return "";
+    return `<div class="atom chunk"${c.first ? ` id="atom-${atom.id}"` : ""}>${atomHead(atom, !c.first)}${diffTable(atom.id, c.rows, "story")}</div>`;
+  };
+
+  const citeLinks = (cites: Citation[]) =>
+    cites
+      .map((c) => `<a class="cite" href="#atom-${c.atomId}" data-atom="${c.atomId}" data-from="${c.lines[0]}" data-to="${c.lines[1]}">${c.lines[0] === c.lines[1] ? `L${c.lines[0]}` : `L${c.lines[0]}–${c.lines[1]}`}</a>`)
+      .join("");
 
   const contextBlock = (c: { file: string; start: number; end: number }) => {
     const text = files.get(c.file)?.headText;
@@ -66,22 +162,27 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
 
   const steps = story.steps
     .map((s, i) => {
-      const paras = s.explanation
-        .map((p) => {
-          const cites = p.cites
-            .map((c) => `<a class="cite" href="#atom-${c.atomId}" data-atom="${c.atomId}" data-from="${c.lines[0]}" data-to="${c.lines[1]}">${c.lines[0] === c.lines[1] ? `L${c.lines[0]}` : `L${c.lines[0]}–${c.lines[1]}`}</a>`)
-            .join("");
-          return `<p>${prose(p.text)}${cites ? ` <span class="cites">${cites}</span>` : ""}</p>`;
+      const stepAtoms = s.atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
+      const { beats } = walkthrough(s, snippets);
+      const walk = beats
+        .map((b) => {
+          const cites = citeLinks(b.cites);
+          const text = blocks(b.text, cites ? `<span class="cites">${cites}</span>` : "");
+          return `<div class="beat">${text ? `<div class="beat-text">${text}</div>` : ""}${b.code.map(chunkBlock).join("")}</div>`;
         })
         .join("");
-      const override = s.orderOverride ? `<p class="override">Placed before code it depends on: ${prose(s.orderOverride)}</p>` : "";
+      const empties = stepAtoms.filter((a) => !(snippets.get(a.id) ?? []).length).map((a) => `<div class="atom" id="atom-${a.id}">${atomHead(a, false)}${emptyNote(a)}</div>`).join("");
+      const hasCode = stepAtoms.some((a) => (snippets.get(a.id) ?? []).length);
+      const override = s.orderOverride ? `<p class="override">Placed before code it depends on: ${inline(s.orderOverride)}</p>` : "";
       const context = (s.context ?? []).map(contextBlock).join("");
       return `<section class="step" id="step-${i + 1}" data-step="${i + 1}">
   <div class="step-marker" aria-hidden="true">${i + 1}</div>
   <div class="step-body">
-    <div class="explanation">${paras}${override}</div>
+    ${hasCode ? `<div class="step-tools"><button class="step-raw" type="button" aria-pressed="false">Raw diff</button></div>` : ""}
+    ${override}
     ${context}
-    ${s.atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a).map(atomBlock).join("")}
+    <div class="walk">${walk}${empties}</div>
+    <div class="rawview">${stepAtoms.filter((a) => (snippets.get(a.id) ?? []).length).map((a) => `<div class="atom">${atomHead(a, false)}${rawHunks(a)}</div>`).join("")}</div>
   </div>
 </section>`;
     })
@@ -98,7 +199,7 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
     : "";
 
   const outline = story.steps
-    .map((s, i) => `<li><input type="checkbox" data-step="${i + 1}" aria-label="Mark step ${i + 1} reviewed"><a href="#step-${i + 1}" data-step="${i + 1}"><span class="n">${i + 1}</span>${esc(s.label)}</a></li>`)
+    .map((s, i) => `<li><input type="checkbox" data-step="${i + 1}" aria-label="Mark step ${i + 1} reviewed"><a href="#step-${i + 1}" data-step="${i + 1}"><span class="n">${i + 1}</span><span>${inline(s.label)}</span></a></li>`)
     .join("");
 
   const cost = opts.costUsd != null ? ` · ~$${opts.costUsd.toFixed(opts.costUsd < 1 ? 3 : 2)}` : "";
@@ -137,7 +238,8 @@ code { font: 0.9em var(--mono); background: var(--ctx-bg); padding: 0.05em 0.3em
 .rail ol { list-style: none; padding: 0; margin: 0; }
 .rail li { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; font-size: 13px; line-height: 1.4; }
 .rail li input { margin-top: 2px; accent-color: var(--accent); }
-.rail li a { color: var(--ink); text-decoration: none; display: flex; gap: 6px; }
+.rail li a { color: var(--ink); text-decoration: none; display: flex; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.rail li a code { font-size: 0.85em; padding: 0 0.2em; }
 .rail li a .n { color: var(--muted); min-width: 1.6em; font-variant-numeric: tabular-nums; }
 .rail li a.current { color: var(--accent); font-weight: 600; }
 .rail li.done a { color: var(--muted); text-decoration: line-through; }
@@ -145,30 +247,39 @@ main { padding: 36px 40px 80px; min-width: 0; }
 header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
 .summary { font-size: 17px; max-width: 72ch; margin: 0 0 36px; }
-.step { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 14px; margin-bottom: 40px; scroll-margin-top: 16px; }
+.summary p { margin: 0 0 10px; }
+.step { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 14px; margin-bottom: 44px; scroll-margin-top: 16px; }
 .step-marker { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--line); display: grid; place-items: center; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
 .step.done .step-marker { background: var(--accent); border-color: var(--accent); color: #fff; }
-.explanation { max-width: 72ch; }
-.explanation p { margin: 0 0 10px; }
+.step-body { min-width: 0; }
+.step-tools { float: right; margin: 2px 0 6px 12px; }
+.beat + .beat { margin-top: 18px; }
+.beat-text { max-width: 72ch; }
+.beat-text p { margin: 0 0 8px; }
+.beat-text ul { margin: 0 0 8px; padding-left: 1.3em; }
 .cites { white-space: nowrap; }
 .cite { font: 11px var(--mono); text-decoration: none; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 2px; color: var(--muted); }
 .cite:hover { color: var(--accent); border-color: var(--accent); }
-.override { font-size: 13px; color: var(--muted); border-left: 2px solid var(--accent); padding-left: 10px; }
-.atom { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 12px 0 0; overflow: hidden; }
+.override { font-size: 13px; color: var(--muted); border-left: 2px solid var(--accent); padding-left: 10px; max-width: 72ch; }
+.atom { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 10px 0 0; overflow: hidden; }
 .atom-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.atom-head.cont { padding: 3px 12px; font-size: 11.5px; color: var(--muted); }
+.atom-head.cont .sym { font-weight: 400; }
 .atom-head .path { font-family: var(--mono); }
 .atom-head .sym { font-family: var(--mono); font-weight: 600; }
 .atom-head .sym::before { content: "› "; color: var(--muted); font-weight: 400; }
 .counts { font-family: var(--mono); font-size: 12px; }
 .plus { color: var(--add-ink); } .minus { color: var(--del-ink); }
 .gh { margin-left: auto; font-size: 12px; text-decoration: none; }
-.raw-toggle { font: 12px var(--sans); background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 4px; padding: 1px 8px; cursor: pointer; }
-.atom-head .gh + .raw-toggle { margin-left: 0; }
+.raw-toggle, .step-raw { font: 12px var(--sans); background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 4px; padding: 1px 8px; cursor: pointer; }
 .atom-head .counts + .raw-toggle { margin-left: auto; }
-.raw-toggle[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.raw-toggle[aria-pressed="true"], .step-raw[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.rawview { display: none; }
+.step.show-raw .rawview { display: block; }
+.step.show-raw .walk .atom { display: none; }
 .diff { width: 100%; border-collapse: collapse; font: 12.5px/1.5 var(--mono); color: var(--code); tab-size: 4; }
 .diff.raw { display: none; }
-.atom.show-raw .diff.raw { display: table; }
+.rawview .diff.raw, .atom.show-raw .diff.raw { display: table; }
 .atom.show-raw .diff.story { display: none; }
 .diff td { padding: 0 10px; vertical-align: top; }
 .diff .ln { width: 1%; min-width: 3.2em; text-align: right; color: var(--muted); user-select: none; font-size: 11.5px; opacity: .8; }
@@ -176,7 +287,12 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .diff .sign { display: inline-block; width: 1.2em; user-select: none; }
 .diff tr.add { background: var(--add-bg); } .diff tr.add .sign { color: var(--add-ink); }
 .diff tr.del { background: var(--del-bg); } .diff tr.del .sign { color: var(--del-ink); }
+.diff tr.reindent { background: var(--ctx-bg); } .diff tr.reindent .sign { color: var(--muted); }
 .diff tr.gap td { color: var(--muted); text-align: center; background: var(--ctx-bg); font-size: 11px; }
+.diff tbody.fold-body { display: none; }
+.diff tbody.fold-body.open { display: table-row-group; }
+.fold-btn { all: unset; cursor: pointer; display: block; width: 100%; padding: 2px 10px; font: 11.5px var(--sans); color: var(--muted); background: var(--ctx-bg); }
+.fold-btn:hover { color: var(--accent); }
 .diff tr.hl td { box-shadow: inset 3px 0 0 var(--accent); }
 .diff tr.hl td.code { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .empty { margin: 0; padding: 10px 12px; color: var(--muted); font-size: 13px; }
@@ -184,7 +300,6 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .context-head { font-size: 12px; color: var(--muted); padding: 5px 12px; background: var(--ctx-bg); }
 .mechanical { margin: 48px 0 0 50px; border-top: 1px solid var(--line); padding-top: 16px; }
 .mechanical summary { cursor: pointer; font-weight: 600; }
-.mech-item { position: relative; }
 .tag { display: inline-block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: 14px; }
 .muted { color: var(--muted); font-weight: 400; }
 footer { margin: 48px 0 0 50px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
@@ -207,9 +322,9 @@ footer { margin: 48px 0 0 50px; font-size: 12.5px; color: var(--muted); border-t
 </nav>
 <main>
 <header>
-  <h1>${esc(pr.title)}</h1>
+  <h1>${inline(pr.title)}</h1>
   <p class="sub">${prLink} · head ${esc(story.headSha.slice(0, 7))} · ${story.steps.length} steps · ${metrics.changedLines} changed lines</p>
-  <p class="summary">${prose(story.summary)}</p>
+  <div class="summary">${blocks(story.summary)}</div>
 </header>
 ${steps}
 ${mechanical}
@@ -244,25 +359,42 @@ ${mechanical}
   });
   paint();
 
+  for (const btn of document.querySelectorAll('.step-raw')) btn.addEventListener('click', () => {
+    const on = btn.closest('.step').classList.toggle('show-raw');
+    btn.setAttribute('aria-pressed', on);
+  });
   for (const btn of document.querySelectorAll('.raw-toggle')) btn.addEventListener('click', () => {
-    const atom = btn.closest('.atom');
-    const on = atom.classList.toggle('show-raw');
+    const on = btn.closest('.atom').classList.toggle('show-raw');
     btn.setAttribute('aria-pressed', on);
   });
 
+  const setFold = (btn, open) => {
+    const body = btn.closest('tbody').nextElementSibling;
+    body.classList.toggle('open', open);
+    btn.setAttribute('aria-expanded', open);
+    btn.textContent = btn.textContent.replace(/· (show|hide)$/, '· ' + (open ? 'hide' : 'show'));
+  };
+  for (const btn of document.querySelectorAll('.fold-btn')) btn.addEventListener('click', () => setFold(btn, btn.getAttribute('aria-expanded') !== 'true'));
+
   for (const c of document.querySelectorAll('.cite')) c.addEventListener('click', (e) => {
     e.preventDefault();
-    const atom = document.getElementById('atom-' + c.dataset.atom);
-    if (!atom) return;
-    atom.classList.remove('show-raw');
+    const step = c.closest('.step');
+    step?.classList.remove('show-raw');
+    step?.querySelector('.step-raw')?.setAttribute('aria-pressed', 'false');
     const from = +c.dataset.from, to = +c.dataset.to;
     document.querySelectorAll('tr.hl').forEach((r) => r.classList.remove('hl'));
     let first = null;
-    for (const r of atom.querySelectorAll('.diff.story tr[data-n]')) {
-      const n = +r.dataset.n;
-      if (n >= from && n <= to) { r.classList.add('hl'); first ??= r; }
+    const scope = step || document;
+    for (const r of scope.querySelectorAll('.walk table.diff[data-atom="' + c.dataset.atom + '"] tr[data-n]')) {
+      const n = +r.dataset.n, o = r.dataset.o ? +r.dataset.o : NaN;
+      if ((n >= from && n <= to) || (o >= from && o <= to)) {
+        r.classList.add('hl');
+        first ??= r;
+        const fold = r.closest('tbody.fold-body');
+        if (fold && !fold.classList.contains('open')) setFold(fold.previousElementSibling.querySelector('.fold-btn'), true);
+      }
     }
-    (first || atom).scrollIntoView({ behavior: 'smooth', block: 'center' });
+    (first || document.getElementById('atom-' + c.dataset.atom))?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   });
 
   const links = new Map([...document.querySelectorAll('.rail a[data-step]')].map((a) => [a.dataset.step, a]));
