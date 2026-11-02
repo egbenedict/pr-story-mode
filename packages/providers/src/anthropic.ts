@@ -6,6 +6,8 @@ export type AnthropicOptions = {
   apiKey?: string; // defaults to ANTHROPIC_API_KEY / an `ant auth login` profile
   baseURL?: string; // e.g. an internal gateway
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
+  /** Calling from a browser extension page with the user's own key (the SDK refuses browsers otherwise). */
+  browser?: boolean;
 };
 
 export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
@@ -24,7 +26,7 @@ export class AnthropicProvider implements LLMProvider {
   constructor(opts: AnthropicOptions = {}) {
     this.model = opts.model ?? DEFAULT_ANTHROPIC_MODEL;
     this.effort = opts.effort ?? "medium";
-    this.client = new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseURL });
+    this.client = new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseURL, dangerouslyAllowBrowser: opts.browser });
   }
 
   async complete(req: CompletionRequest): Promise<{ text: string; json?: unknown; usage: Usage }> {

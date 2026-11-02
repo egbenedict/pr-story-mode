@@ -241,9 +241,17 @@ async function benchCmd(v: Values) {
       summarized: m.summarized ? m.summarized.batches : 0,
       coverage: r.coverage.ok ? "ok" : `FAIL(${r.coverage.missing.length}m/${r.coverage.duplicated.length}d/${r.coverage.extra.length}x)`,
       repairRounds: m.repairRounds,
+      fallbackOrder: m.fallbackOrder,
       undeclaredViolations: m.undeclaredViolations,
       groundingFailPct: m.citations ? +((100 * m.groundingFailures) / m.citations).toFixed(1) : 0,
+      missingExplanations: m.missingExplanations,
+      badCuts: m.badCuts,
       tokens: m.tokens,
+      inputTokens: m.usage.inputTokens,
+      outputTokens: m.usage.outputTokens,
+      cacheReadTokens: m.usage.cacheReadTokens,
+      cacheWriteTokens: m.usage.cacheWriteTokens,
+      firstStepMs: m.ms.firstStep ?? "",
       ms: m.ms.total,
     };
     rows.push(row);

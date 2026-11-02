@@ -2,7 +2,7 @@
 
 Turns a pull request into a near-linear, narrated story. The diff is broken into small **change atoms** (one function, method, class member, config key or import list each), ordered so concepts come before their uses, and explained step by step.
 
-This repo implements the [technical design](https://claude.ai/artifact/8sYLrCQsfX4pGtwiwS4FvP) as a CLI. **Phase 1** (ingest and parse, atoms, plan and validate, HTML output) is done. **Phase 2** (story quality) is in progress: unchanged context beside each step, staged ordering for large PRs, and linked issues are in.
+This repo implements the [technical design](https://claude.ai/artifact/8sYLrCQsfX4pGtwiwS4FvP) as a CLI and a Chrome extension. **Phase 1** (ingest and parse, atoms, plan and validate, HTML output) is done. **Phase 2** (story quality) is nearly done: the symbol graph, unchanged context beside each step, staged ordering for large PRs, linked issues and the grounding check are in; the benchmark has not yet run with a model. **Phase 3** (the extension) has started: the reader, streaming, settings and caching work; comments, GitHub-only context and more providers are next.
 
 ## Quick start
 
@@ -24,6 +24,22 @@ npm run story -- story --repo ../my-repo --base main --head my-branch
 Each run writes `stories/<name>/story.html` (the reader) and `story.json` (Story, atoms, edges, metrics, coverage report).
 
 Without an API key the pipeline still runs end to end. It uses pure dependency order and short template explanations, so you can check atoms, ordering and coverage for free.
+
+## Browser extension
+
+```bash
+npm run build:extension   # writes packages/extension/dist
+```
+
+In Chrome, open `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked** and pick `packages/extension/dist`. Settings open on install (and from the toolbar button): pick a provider, paste an API key, and optionally add a GitHub token for private repositories. Then open any pull request on github.com and press **Story mode**.
+
+- **Content script** (`src/content.ts`): detects PR pages, including GitHub's in-page navigation, and adds one button. It goes in the PR header's action area when that is on screen, otherwise it floats at the bottom right. Nothing else on GitHub's page is changed.
+- **Reader** (`src/reader/`): an extension page shown in a full-window overlay. It runs the whole pipeline in the browser: GitHub ingest, tree-sitter in WASM, ordering and explanation. The outline and code appear as soon as the order is settled, and explained steps stream in. The reader shows tokens and estimated cost while it writes, a per-step reviewed checkbox, raw diffs, citations that highlight lines, and a banner when the model failed or new commits have landed.
+- **Why an extension page and not the service worker**: Chrome stops idle service workers after about 30 seconds, and one model call can take longer. An extension page in an iframe also keeps GitHub's styles and content security policy out of the reader. The service worker only opens settings.
+- **Settings** (`src/options/`, `src/settings.ts`): stored in `chrome.storage.local`, never synced. A custom base URL (gateway or self-hosted server) asks Chrome for permission to reach that host.
+- **Cache** (`src/cache.ts`): finished stories in IndexedDB, keyed by repository and PR number, with the head commit they cover. Reopening a PR is free; if new commits landed, the old story shows with a regenerate banner. Stories where the model failed are not cached.
+
+To work on the reader without loading the extension, serve `packages/extension/dist` locally and open `reader.html?pr=<PR URL>`; settings then fall back to the page's `localStorage`.
 
 ## Commands
 
@@ -68,14 +84,15 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 
 ## Packages
 
-- `packages/core`: the pipeline and validators. It uses no browser or Node APIs (`fetch` only), so it can run inside the extension's service worker later.
+- `packages/core`: the pipeline and validators. It uses no browser or Node APIs (`fetch` only), so the same code runs in the CLI and the extension.
 - `packages/providers`: `LLMProvider` adapters (Anthropic, OpenAI and OpenAI-compatible servers, plus a scripted mock for tests).
 - `packages/cli`: local git and GitHub ingest, grammar loading, the HTML reader, and the `story`, `atoms` and `bench` commands.
+- `packages/extension`: the Manifest V3 extension (content script, reader, settings, cache), bundled with esbuild.
 
 ## Tests and benchmark
 
 ```bash
-npm test            # 45 tests: diff parsing, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues
+npm test            # 47 tests: diff parsing, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings
 npm run typecheck
 ```
 
@@ -92,5 +109,5 @@ With context retrieval from the local clone (still no LLM), coverage holds on al
 ## Not done yet
 
 - Phase 2: context outside the PR's files for GitHub PRs without a local clone; running the benchmark end to end with a model (needs an API key) to measure grounding, repair rounds and cost.
-- Browser extension, comment round-trip, IndexedDB caching, and Bedrock, Vertex and Azure adapters (Phase 3).
+- Phase 3: comment round-trip to GitHub reviews; context from unchanged files for PRs without a local clone (the extension only uses the PR's own files for now); Bedrock, Vertex and Azure adapters; enterprise policy settings; re-using cached atoms when new commits land. The extension has not yet been tested loaded in Chrome, only its reader page served locally and its content script injected by hand on github.com.
 - The 200 to 500 PR benchmark, model comparison and reviewer study (Phase 4).

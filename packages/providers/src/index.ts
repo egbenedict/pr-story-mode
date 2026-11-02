@@ -8,7 +8,7 @@ export { MockProvider } from "./mock";
 
 export type ProviderConfig =
   | { provider: "none" }
-  | { provider: "anthropic"; model?: string; apiKey?: string; baseURL?: string; effort?: "low" | "medium" | "high" | "xhigh" | "max" }
+  | { provider: "anthropic"; model?: string; apiKey?: string; baseURL?: string; effort?: "low" | "medium" | "high" | "xhigh" | "max"; browser?: boolean }
   | { provider: "openai"; model?: string; apiKey?: string; baseURL?: string }
   | { provider: "openai-compatible"; model: string; baseURL: string; apiKey?: string; jsonSchema?: boolean; maxContextTokens?: number };
 

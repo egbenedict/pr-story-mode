@@ -3,3 +3,4 @@ stories/
 bench/
 .DS_Store
 *.log
+packages/extension/dist/

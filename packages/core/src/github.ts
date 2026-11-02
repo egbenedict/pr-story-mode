@@ -39,11 +39,8 @@ export type GitHubOptions = {
   concurrency?: number;
 };
 
-/**
- * Ingest a PR: metadata, unified diff, and base/head versions of the files that need parsing.
- * The diff is GitHub's three-dot diff, so base files are read at the merge base.
- */
-export async function fetchPullRequest(ref: PRRef, opts: GitHubOptions = {}): Promise<PRInput> {
+/** A GET against the REST API that throws a readable error, mentioning rate limits. */
+function githubGetter(ref: PRRef, opts: GitHubOptions) {
   const api = opts.apiBase ?? defaultApiBase(ref.host);
   const f = opts.fetchImpl ?? fetch;
   const headers = (accept: string): Record<string, string> => ({
@@ -51,15 +48,30 @@ export async function fetchPullRequest(ref: PRRef, opts: GitHubOptions = {}): Pr
     "X-GitHub-Api-Version": "2022-11-28",
     ...(opts.token ? { Authorization: `Bearer ${opts.token}` } : {}),
   });
-  const get = async (path: string, accept = "application/vnd.github+json") => {
+  return async (path: string, accept = "application/vnd.github+json") => {
     const res = await f(`${api}${path}`, { headers: headers(accept) });
     if (!res.ok) {
       const remaining = res.headers.get("x-ratelimit-remaining");
-      const hint = remaining === "0" ? " (GitHub rate limit reached; set GITHUB_TOKEN)" : "";
+      const hint = remaining === "0" ? " (GitHub rate limit reached; add a GitHub token)" : res.status === 404 ? " (private repository? add a GitHub token)" : "";
       throw new Error(`GitHub ${res.status} for ${path}${hint}: ${(await res.text()).slice(0, 200)}`);
     }
     return res;
   };
+}
+
+/** Just the PR's current head commit and title: one request, for cache checks. */
+export async function fetchPullHead(ref: PRRef, opts: GitHubOptions = {}): Promise<{ headSha: string; title: string }> {
+  const get = githubGetter(ref, opts);
+  const meta = (await (await get(`/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`)).json()) as { title: string; head: { sha: string } };
+  return { headSha: meta.head.sha, title: meta.title };
+}
+
+/**
+ * Ingest a PR: metadata, unified diff, and base/head versions of the files that need parsing.
+ * The diff is GitHub's three-dot diff, so base files are read at the merge base.
+ */
+export async function fetchPullRequest(ref: PRRef, opts: GitHubOptions = {}): Promise<PRInput> {
+  const get = githubGetter(ref, opts);
 
   const repoPath = `/repos/${ref.owner}/${ref.repo}`;
   const meta = (await (await get(`${repoPath}/pulls/${ref.number}`)).json()) as {

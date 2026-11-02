@@ -6,11 +6,13 @@ import { buildGraph, type Edge } from "./graph";
 import { orderAtoms, type OrderEvent } from "./order";
 import type { ParserHost } from "./parse";
 import type { ChangeAtom, LLMProvider, PRInput, Story, StoryStep, Usage } from "./types";
-import { checkCoverage, dependencyViolations, type CoverageReport } from "./validate";
+import { checkCoverage, dependencyViolations, type CoverageReport, type Plan } from "./validate";
 
 export type PipelineEvent =
   | { type: "stage"; stage: "atomize" | "graph" | "order" | "context" | "explain" | "done" }
   | OrderEvent
+  /** The step order is settled: readers can show the outline and code before explanations arrive. */
+  | { type: "plan"; atoms: ChangeAtom[]; plan: Plan; fallback: boolean }
   | { type: "step"; index: number; step: StoryStep };
 
 export type PipelineMetrics = {
@@ -77,6 +79,7 @@ export async function runPipeline(
   emit({ type: "stage", stage: "order" });
   const order = await orderAtoms(pr, atoms, edges, provider, (e) => emit(e), { summarizeAboveTokens: opts.summarizeAboveTokens });
   const tOrder = Date.now();
+  emit({ type: "plan", atoms, plan: order.plan, fallback: order.fallback });
 
   emit({ type: "stage", stage: "context" });
   const ctx = opts.noContext
