@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atomizePR, buildGraph, classifyAtoms, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
+import { atomizePR, buildGraph, classifyAtoms, EXPLAIN_SYSTEM, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
 import { MockProvider } from "@prstory/providers";
 import { createHost } from "../src/grammars";
 import { renderStoryHtml } from "../src/render";
@@ -154,5 +154,14 @@ describe("runPipeline", () => {
     expect(step1.indexOf("high values")).toBeLessThan(step1.indexOf('class="atom chunk"'));
     expect(step1.match(/class="atom chunk"/g)).toHaveLength(2);
     expect(step1).toContain("continued");
+  });
+});
+
+describe("explanation voice", () => {
+  it("tells the model it is not the author and to write in the third person", () => {
+    expect(EXPLAIN_SYSTEM).not.toMatch(/You wrote this pull request/);
+    expect(EXPLAIN_SYSTEM).toContain("You did not write the pull request");
+    expect(EXPLAIN_SYSTEM).toContain("third person");
+    expect(EXPLAIN_SYSTEM).toMatch(/Never use "I", "we"/);
   });
 });
