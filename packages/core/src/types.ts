@@ -133,6 +133,8 @@ export type CompletionRequest = {
   messages: Msg[];
   schema?: JSONSchema;
   maxTokens: number;
+  /** Called with each piece of output text as it streams, by providers that stream. */
+  onText?: (delta: string) => void;
 };
 
 export interface LLMProvider {

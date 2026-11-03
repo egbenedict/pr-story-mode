@@ -289,3 +289,36 @@ describe("reusing the previous story after a push", () => {
     expect(planFromPrevious(prev, v2, atoms, edges)?.changed).toEqual([1, 2]);
   });
 });
+
+describe("streaming", () => {
+  it("hands each step to the reader as soon as it is written, with drafts of the one in progress, and the plan as it is planned", async () => {
+    const { clamp, run, fmt } = await setup();
+    const provider = new MockProvider([plan([{ atomIds: [clamp], label: "Add clamp" }, { atomIds: [run], label: "Use clamp in run" }], [fmt]), explainAll], { chunk: 12, delayMs: 15 });
+    const events: { type: string; at: number; index?: number; text?: string; labels?: string[]; summary?: string }[] = [];
+    let explainDone = 0;
+    const r = await runPipeline(pr, {
+      host,
+      provider,
+      noContext: true,
+      onEvent: (e) => {
+        if (e.type === "stage" && e.stage === "done") explainDone = Date.now();
+        events.push({ type: e.type, at: Date.now(), ...("index" in e ? { index: e.index } : {}), ...("text" in e ? { text: e.text } : {}), ...(e.type === "order-draft" ? { labels: e.labels, summary: e.summary } : {}) });
+      },
+    });
+    expect(r.coverage.ok).toBe(true);
+
+    const drafts = events.filter((e) => e.type === "order-draft");
+    expect(drafts.length).toBeGreaterThan(1);
+    expect(drafts.at(-1)).toMatchObject({ summary: "Adds clamp and uses it.", labels: ["Add clamp", "Use clamp in run"] });
+    expect(drafts.some((d) => d.labels!.length === 1)).toBe(true); // labels arrive one by one
+
+    const steps = events.filter((e) => e.type === "step");
+    expect(steps.map((s) => s.index)).toEqual([0, 1]);
+    // Step 1 arrived while step 2 was still being written.
+    const step2Drafts = events.filter((e) => e.type === "draft" && e.index === 1);
+    expect(step2Drafts.length).toBeGreaterThan(0);
+    expect(steps[0].at).toBeLessThanOrEqual(step2Drafts[0].at);
+    expect(steps[0].at).toBeLessThan(explainDone);
+    expect(step2Drafts.at(-1)!.text).toContain("Step 2 starts here.");
+  });
+});

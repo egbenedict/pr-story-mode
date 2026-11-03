@@ -1,5 +1,6 @@
 import { addUsage, completeJson, estimateTokens, prHeader } from "./llm";
 import { fallbackLabel } from "./order";
+import { partialStrings, streamedArray, throttle } from "./partial-json";
 import { atomLabel, atomSnippet, lineCounts, rowNumber, snippetText, type SnippetRow } from "./snippet";
 import type { Beat, ChangeAtom, Citation, ContextSnippet, JSONSchema, LLMProvider, PRInput, StoryStep } from "./types";
 import type { Plan } from "./validate";
@@ -104,6 +105,8 @@ export async function explainSteps(
   context: ContextSnippet[][] = [],
   /** Steps already explained (from a previous story); only the others are sent to the model. */
   reuse: Map<number, StoryStep> = new Map(),
+  /** The text written so far for a step that is still streaming. */
+  onDraft?: (index: number, text: string) => void,
 ): Promise<{ steps: StoryStep[]; stats: ExplainStats }> {
   const byId = new Map(atoms.map((a) => [a.id, a]));
   const files = new Map(pr.files.map((f) => [f.path, f]));
@@ -159,35 +162,16 @@ export async function explainSteps(
     const consecutive = win.every((i, k) => k === 0 || i === win[k - 1] + 1);
     const which = win.length === 1 ? `step ${win[0] + 1}` : consecutive ? `steps ${win[0] + 1} to ${win[win.length - 1] + 1}` : `steps ${win.slice(0, -1).map((i) => i + 1).join(", ")} and ${win[win.length - 1] + 1}`;
     const content = `${prev}Write the explanations for ${which}.\n\n${win.map((i) => stepTexts[i]).join("\n\n")}`;
-    let json: unknown;
-    try {
-      const res = await completeJson(provider, {
-        system: EXPLAIN_SYSTEM,
-        sharedPrefix,
-        messages: [{ role: "user", content }],
-        schema: EXPLAIN_SCHEMA,
-        maxTokens: 16000,
-      });
-      addUsage(total, res.usage);
-      json = res.json;
-    } catch {
-      json = undefined;
-    }
-
-    const got = new Map<number, unknown[]>();
-    const arr = (json as { steps?: unknown[] } | undefined)?.steps;
-    if (Array.isArray(arr))
-      for (const s of arr) {
-        const o = s as { step?: unknown; beats?: unknown };
-        if (typeof o.step === "number" && Array.isArray(o.beats)) got.set(o.step - 1, o.beats);
-      }
 
     const allowed = new Map<string, [number, number]>();
     for (const i of win) for (const id of plan.steps[i].atomIds) allowed.set(id, shownRange(snippets.get(id)!));
     const ctxAllowed = new Map(ctxLabels.filter((c) => win.includes(c.step)).map((c) => [c.label, c.snip]));
+    const done = new Set<number>();
 
-    for (const i of win) {
-      const beats = got.get(i);
+    /** Ground one step's beats and hand it to the reader. */
+    const finish = (i: number, beats: unknown[] | undefined) => {
+      if (done.has(i)) return;
+      done.add(i);
       if (!beats?.length) {
         stats.missingSteps++;
         steps[i].explanation = [templateExplanation(steps[i].atomIds.map((id) => byId.get(id)!))];
@@ -222,7 +206,61 @@ export async function explainSteps(
         });
       }
       onStep?.(i, steps[i]);
+    };
+    const stepBeats = (s: unknown): [number, unknown[]] | null => {
+      const o = s as { step?: unknown; beats?: unknown };
+      return typeof o?.step === "number" && Array.isArray(o.beats) && win.includes(o.step - 1) ? [o.step - 1, o.beats] : null;
+    };
+
+    // While the reply streams, each step goes to the reader as soon as its JSON is complete, and the
+    // step being written shows its sentences so far.
+    let streamed = "";
+    let lastDraft = "";
+    const progress = throttle(() => {
+      const { items, partial } = streamedArray(streamed, "steps");
+      for (const it of items) {
+        const sb = stepBeats(it);
+        if (sb && sb[1].length) finish(sb[0], sb[1]);
+      }
+      if (partial && onDraft) {
+        const n = /"step"\s*:\s*(\d+)/.exec(partial);
+        const i = n ? +n[1] - 1 : -1;
+        const text = partialStrings(partial, "text").join("\n\n");
+        if (win.includes(i) && !done.has(i) && text !== lastDraft) {
+          lastDraft = text;
+          onDraft(i, text);
+        }
+      }
+    }, 120);
+
+    let json: unknown;
+    try {
+      const res = await completeJson(provider, {
+        system: EXPLAIN_SYSTEM,
+        sharedPrefix,
+        messages: [{ role: "user", content }],
+        schema: EXPLAIN_SCHEMA,
+        maxTokens: 16000,
+        onText: (d) => {
+          streamed += d;
+          progress.run();
+        },
+      });
+      addUsage(total, res.usage);
+      json = res.json;
+    } catch {
+      json = undefined;
     }
+
+    // The final reply decides anything the stream didn't settle.
+    const arr = (json as { steps?: unknown[] } | undefined)?.steps;
+    const got = new Map<number, unknown[]>();
+    if (Array.isArray(arr))
+      for (const s of arr) {
+        const sb = stepBeats(s);
+        if (sb) got.set(sb[0], sb[1]);
+      }
+    for (const i of win) finish(i, got.get(i));
   }
   stats.tokens = total.tokens;
   return { steps, stats };

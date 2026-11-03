@@ -12,9 +12,13 @@ import { checkCoverage, dependencyViolations, type CoverageReport, type Plan } f
 export type PipelineEvent =
   | { type: "stage"; stage: "atomize" | "graph" | "order" | "context" | "explain" | "done" }
   | OrderEvent
+  /** The diff is split into atoms. */
+  | { type: "atoms"; atoms: number; mechanical: number; files: number }
   /** The step order is settled: readers can show the outline and code before explanations arrive. */
   | { type: "plan"; atoms: ChangeAtom[]; plan: Plan; fallback: boolean }
-  | { type: "step"; index: number; step: StoryStep };
+  | { type: "step"; index: number; step: StoryStep }
+  /** The explanation of a step still being written, so far. */
+  | { type: "draft"; index: number; text: string };
 
 export type PipelineMetrics = {
   files: number;
@@ -85,6 +89,7 @@ export async function runPipeline(
   emit({ type: "stage", stage: "atomize" });
   const atoms = classifyAtoms(pr, await atomizePR(pr, opts.host));
   const tAtoms = Date.now();
+  emit({ type: "atoms", atoms: atoms.length, mechanical: atoms.filter((a) => a.mechanical).length, files: pr.files.length });
 
   emit({ type: "stage", stage: "graph" });
   const edges = buildGraph(atoms);
@@ -126,6 +131,7 @@ export async function runPipeline(
     },
     ctx.context,
     reused,
+    (index, text) => emit({ type: "draft", index, text }),
   );
   const tExplain = Date.now();
 

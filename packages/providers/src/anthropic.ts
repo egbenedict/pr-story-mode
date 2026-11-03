@@ -58,6 +58,7 @@ export class AnthropicProvider implements LLMProvider {
       system: req.system,
       messages,
     });
+    if (req.onText) stream.on("text", (delta) => req.onText!(delta));
     const msg = await stream.finalMessage();
 
     if (msg.stop_reason === "refusal") {

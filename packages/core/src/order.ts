@@ -1,3 +1,4 @@
+import { partialStrings, streamedArray, throttle } from "./partial-json";
 import { dependencyOrder, type Edge } from "./graph";
 import { addUsage, completeJson, estimateTokens, prHeader } from "./llm";
 import { atomLabel, atomSnippet, lineCounts, snippetText } from "./snippet";
@@ -53,6 +54,8 @@ export type OrderResult = {
 
 export type OrderEvent =
   | { type: "order-attempt"; round: number; errors: string[] }
+  /** The plan as the model writes it: the summary and step labels so far (not yet validated). */
+  | { type: "order-draft"; summary: string; labels: string[] }
   | { type: "summarize"; done: number; total: number };
 
 /** Above this many prompt tokens (or half the context window, if smaller) atoms are summarized first. */
@@ -143,8 +146,25 @@ export async function orderAtoms(
 
   for (let round = 0; round <= MAX_REPAIR_ROUNDS; round++) {
     let res: Awaited<ReturnType<typeof completeJson>>;
+    let streamed = "";
+    const draft = throttle(() => {
+      const { items, partial } = streamedArray(streamed, "steps");
+      const labels = items.map((it) => (it as { label?: unknown }).label).filter((l): l is string => typeof l === "string");
+      const writing = partial ? partialStrings(partial, "label")[0] : undefined;
+      onEvent?.({ type: "order-draft", summary: partialStrings(streamed.split(/"steps"\s*:/)[0], "summary")[0] ?? "", labels: writing ? [...labels, writing] : labels });
+    }, 150);
     try {
-      res = await completeJson(provider, { system: ORDER_SYSTEM, messages, schema: ORDER_SCHEMA, maxTokens: 16000 });
+      res = await completeJson(provider, {
+        system: ORDER_SYSTEM,
+        messages,
+        schema: ORDER_SCHEMA,
+        maxTokens: 16000,
+        onText: (d) => {
+          streamed += d;
+          draft.run();
+        },
+      });
+      draft.flush();
     } catch (err) {
       errors = [`Provider error: ${(err as Error).message}`];
       onEvent?.({ type: "order-attempt", round, errors });
