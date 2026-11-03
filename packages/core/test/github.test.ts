@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commentableLines, createReviewComment, fetchPullRequest, fetchReviewComments, GitHubError, lineKey, linkedIssueNumbers, parseUnifiedDiff, placeThreads, prHeader, rowTarget, submitReview, type PRInput, type ReviewComment } from "../src/index";
+import { commentableLines, commentRange, createReviewComment, diffPlaces, inCommentRange, fetchPullRequest, fetchReviewComments, GitHubError, lineKey, linkedIssueNumbers, parseUnifiedDiff, placeThreads, prHeader, rowTarget, submitReview, type PRInput, type ReviewComment } from "../src/index";
 
 describe("linked issues", () => {
   it("finds issues the description fixes, closes or resolves in the same repository", () => {
@@ -83,6 +83,22 @@ describe("review comments", () => {
     expect(rowTarget({ type: "del", text: "", oldLine: 11 })).toEqual({ side: "LEFT", line: 11 });
     expect(rowTarget({ type: "reindent", text: "", oldLine: 4, newLine: 5 })).toEqual({ side: "RIGHT", line: 5 });
     expect(rowTarget({ type: "gap" })).toBeNull();
+  });
+
+  it("builds ranges in diff order that can cross from removed to added lines, within one hunk", () => {
+    const two = parseUnifiedDiff(diff + ["@@ -40,2 +40,2 @@", "-a();", "+b();", " c();", ""].join("\n"))[0];
+    const places = diffPlaces(two);
+    const L = (line: number) => ({ side: "LEFT" as const, line });
+    const R = (line: number) => ({ side: "RIGHT" as const, line });
+    const both = { side: "RIGHT", line: 11, startSide: "LEFT", startLine: 11 };
+    expect(commentRange(places, "a.ts", L(11), R(11))).toEqual(both);
+    expect(commentRange(places, "a.ts", R(11), L(11))).toEqual(both); // dragged upward
+    expect(commentRange(places, "a.ts", R(10), L(11))).toEqual({ side: "LEFT", line: 11, startSide: "LEFT", startLine: 10 });
+    expect(commentRange(places, "a.ts", R(12), R(12))).toEqual({ side: "RIGHT", line: 12 });
+    expect(commentRange(places, "a.ts", R(10), R(41))).toBeNull(); // another hunk
+    expect(commentRange(places, "a.ts", R(10), R(13))).toBeNull(); // outside the diff
+    const r = commentRange(places, "a.ts", L(11), R(11))!;
+    expect([L(11), R(11), R(10), R(12)].map((at) => inCommentRange(places, "a.ts", r, at))).toEqual([true, true, false, false]);
   });
 
   const comment = (o: Partial<ReviewComment> & { id: number }): ReviewComment => ({

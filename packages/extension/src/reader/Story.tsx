@@ -138,7 +138,11 @@ function Row({ r, hl, path, cls, gap }: { r: SnippetRow; hl: boolean; path?: str
   const sel = !!(t && path && cm?.selected(path, t.side, t.line));
   return (
     <>
-      <tr className={`${r.type}${cls ? ` ${cls}` : ""}${hl ? " hl" : ""}${sel ? " sel" : ""}`} title={cls === "other" ? "Changed in another step" : undefined}>
+      <tr
+        className={`${r.type}${cls ? ` ${cls}` : ""}${hl ? " hl" : ""}${sel ? " sel" : ""}`}
+        title={cls === "other" ? "Changed in another step" : undefined}
+        onMouseEnter={t && path && cm ? () => cm.hover(path, t.side, t.line) : undefined}
+      >
         <td className="ln">
           {t?.side === "LEFT" ? button : null}
           {old}

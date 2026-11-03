@@ -18,6 +18,55 @@ export function commentableLines(file: FileDiff | undefined): Set<string> {
   return out;
 }
 
+type DiffPlace = { order: number; hunk: number; oldLine?: number; newLine?: number };
+
+/** Each commentable line's place in the file's diff: its order, its hunk, and both line numbers for unchanged lines. */
+export function diffPlaces(file: FileDiff | undefined): Map<string, DiffPlace> {
+  const m = new Map<string, DiffPlace>();
+  if (!file) return m;
+  let n = 0;
+  file.hunks.forEach((h, hunk) => {
+    for (const l of h.lines) {
+      const p: DiffPlace = { order: n++, hunk, oldLine: l.type === "add" ? undefined : l.oldLine, newLine: l.type === "del" ? undefined : l.newLine };
+      if (l.type !== "add") m.set(lineKey(file.path, { side: "LEFT", line: l.oldLine }), p);
+      if (l.type !== "del") m.set(lineKey(file.path, { side: "RIGHT", line: l.newLine }), p);
+    }
+  });
+  return m;
+}
+
+export type LineRange = { side: Side; line: number; startSide?: Side; startLine?: number };
+
+/**
+ * The comment range from `anchor` (where the selection started) to `to`, in diff order, or null when
+ * GitHub wouldn't take it: both ends must be in the same hunk. A range may start on removed lines and
+ * end on added ones. A range that ends on a removed line starts on the base side too, using an
+ * unchanged start line's base number.
+ */
+export function commentRange(places: Map<string, DiffPlace>, path: string, anchor: { side: Side; line: number }, to: { side: Side; line: number }): LineRange | null {
+  const a = places.get(lineKey(path, anchor));
+  const b = places.get(lineKey(path, to));
+  if (!a || !b || a.hunk !== b.hunk) return null;
+  if (a.order === b.order) return { side: to.side, line: to.line };
+  const [start, end, sp] = a.order < b.order ? [anchor, to, a] : [to, anchor, b];
+  let startSide = start.side;
+  let startLine = start.line;
+  if (end.side === "LEFT" && startSide === "RIGHT") {
+    if (sp.oldLine == null) return null;
+    startSide = "LEFT";
+    startLine = sp.oldLine;
+  }
+  return { side: end.side, line: end.line, startSide, startLine };
+}
+
+/** Whether a line is inside a range, in diff order. */
+export function inCommentRange(places: Map<string, DiffPlace>, path: string, r: LineRange, at: { side: Side; line: number }): boolean {
+  const p = places.get(lineKey(path, at));
+  const e = places.get(lineKey(path, { side: r.side, line: r.line }));
+  const s = r.startLine != null ? places.get(lineKey(path, { side: r.startSide ?? r.side, line: r.startLine })) : e;
+  return !!p && !!s && !!e && p.order >= s.order && p.order <= e.order;
+}
+
 /** Where a comment on this reader row goes: removed lines on the base side, everything else on the head side. */
 export function rowTarget(r: SnippetRow): { side: Side; line: number } | null {
   if (r.type === "gap") return null;

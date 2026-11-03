@@ -5,11 +5,15 @@
 import {
   atomSnippet,
   commentableLines,
+  commentRange,
   createReviewComment,
+  diffPlaces,
+  inCommentRange,
   fetchReviewComments,
   GitHubError,
   lineKey,
   placeThreads,
+  type LineRange,
   replyToReviewComment,
   rowTarget,
   submitReview,
@@ -71,7 +75,15 @@ export const COMMENTS_CSS = `
 `;
 
 export type Draft = NewComment & { id: string };
-type Composer = { path: string; side: Side; line: number; startLine?: number };
+/** The open comment box: its range, and the line the selection started on (shift-click extends from there). */
+type Composer = LineRange & { path: string; anchor: { side: Side; line: number } };
+
+/** "line 12", "lines 10–12", or "lines −11 to +11" for a range from removed to added lines. */
+export function rangeLabel(r: LineRange): string {
+  if (r.startLine == null) return `line ${r.line}`;
+  const sign = (side: Side) => (side === "LEFT" ? "−" : "+");
+  return (r.startSide ?? r.side) === r.side ? `lines ${r.startLine}–${r.line}` : `lines ${sign(r.startSide!)}${r.startLine} to ${sign(r.side)}${r.line}`;
+}
 
 type CommentsApi = {
   canComment: (path: string, side: Side, line: number) => boolean;
@@ -79,7 +91,12 @@ type CommentsApi = {
   draftsAt: (path: string, side: Side, line: number) => Draft[];
   selected: (path: string, side: Side, line: number) => boolean;
   composer: Composer | null;
+  /** Keyboard: open the box on one line, or extend the open one. */
   open: (path: string, side: Side, line: number, extend: boolean) => void;
+  /** Mouse down on a line's "+": start a drag selection, or with shift extend the open box. */
+  press: (path: string, side: Side, line: number, shift: boolean) => void;
+  /** The pointer moved onto a line: extend the selection being dragged. */
+  hover: (path: string, side: Side, line: number) => void;
   close: () => void;
   hasToken: boolean;
   postSingle: (body: string) => Promise<void>;
@@ -137,6 +154,7 @@ export function CommentsProvider({ prRef, view, current, children }: { prRef: PR
   const [loadError, setLoadError] = useState<string | null>(null);
   const [hasToken, setHasToken] = useState(false);
   const [composer, setComposer] = useState<Composer | null>(null);
+  const [drag, setDrag] = useState<Composer | null>(null);
   const [drafts, setDrafts] = useDrafts(`prstory:drafts:${prRef.owner}/${prRef.repo}#${prRef.number}@${view.headSha}`);
   const gh = async () => ({ token: (await loadSettings()).githubToken || undefined });
 
@@ -183,20 +201,48 @@ export function CommentsProvider({ prRef, view, current, children }: { prRef: PR
   const { placed, unplaced } = useMemo(() => placeThreads(comments, { headSha: view.headSha, current }), [comments, view.headSha, current]);
   const hidden = useMemo(() => [...unplaced, ...[...placed].filter(([k]) => !visible.has(k)).flatMap(([, ts]) => ts)], [placed, unplaced, visible]);
 
-  const target = (c: Composer): Omit<NewComment, "body"> => ({ path: c.path, side: c.side, line: c.line, ...(c.startLine != null ? { startLine: c.startLine, startSide: c.side } : {}) });
+  const places = useMemo(() => new Map(view.pr.files.map((f) => [f.path, diffPlaces(f)])), [view.pr]);
+  const rangeTo = (path: string, anchor: { side: Side; line: number }, to: { side: Side; line: number }): Composer | null => {
+    const r = commentRange(places.get(path) ?? new Map(), path, anchor, to);
+    return r ? { ...r, path, anchor } : null;
+  };
+
+  // A drag ends wherever the mouse is released; the box opens on the selected range.
+  useEffect(() => {
+    if (!drag) return;
+    const up = () => {
+      setComposer(drag);
+      setDrag(null);
+    };
+    window.addEventListener("mouseup", up);
+    return () => window.removeEventListener("mouseup", up);
+  }, [drag]);
+
+  const target = (c: Composer): Omit<NewComment, "body"> => ({ path: c.path, side: c.side, line: c.line, ...(c.startLine != null ? { startLine: c.startLine, startSide: c.startSide ?? c.side } : {}) });
+  const single = (path: string, side: Side, line: number): Composer => ({ path, side, line, anchor: { side, line } });
 
   const api: CommentsApi = {
     canComment: (path, side, line) => commentable.has(lineKey(path, { side, line })),
     threadsAt: (path, side, line) => placed.get(lineKey(path, { side, line })) ?? [],
     draftsAt: (path, side, line) => drafts.filter((d) => d.path === path && d.side === side && d.line === line),
-    selected: (path, side, line) => !!composer && composer.path === path && composer.side === side && line <= composer.line && line >= (composer.startLine ?? composer.line),
+    selected: (path, side, line) => {
+      const c = drag ?? composer;
+      return !!c && c.path === path && inCommentRange(places.get(path) ?? new Map(), path, c, { side, line });
+    },
     composer,
     open: (path, side, line, extend) => {
-      if (extend && composer && composer.path === path && composer.side === side && line !== composer.line) {
-        const lo = Math.min(line, composer.startLine ?? composer.line, composer.line);
-        const hi = Math.max(line, composer.line);
-        setComposer({ path, side, line: hi, startLine: lo });
-      } else setComposer({ path, side, line });
+      const r = extend && composer?.path === path ? rangeTo(path, composer.anchor, { side, line }) : null;
+      setComposer(r ?? single(path, side, line));
+    },
+    press: (path, side, line, shift) => {
+      const r = shift && composer?.path === path ? rangeTo(path, composer.anchor, { side, line }) : null;
+      if (r) setComposer(r);
+      else setDrag(single(path, side, line));
+    },
+    hover: (path, side, line) => {
+      if (!drag || drag.path !== path) return;
+      const r = rangeTo(path, drag.anchor, { side, line });
+      if (r && (r.line !== drag.line || r.side !== drag.side || r.startLine !== drag.startLine || r.startSide !== drag.startSide)) setDrag(r);
     },
     close: () => setComposer(null),
     hasToken,
@@ -385,9 +431,15 @@ export function CommentButton({ path, side, line }: { path: string; side: Side; 
     <button
       type="button"
       className="cm-add"
-      title="Comment on this line (shift-click to comment on a range)"
+      title="Comment on this line. Drag down or up, or shift-click another line, to comment on a range."
       aria-label={`Comment on line ${line}`}
-      onClick={(e) => cm.open(path, side, line, e.shiftKey)}
+      onMouseDown={(e) => {
+        if (e.button !== 0) return;
+        e.preventDefault(); // no text selection while dragging
+        cm.press(path, side, line, e.shiftKey);
+      }}
+      // Mouse clicks are handled on mouse down; this is for the keyboard (Enter or Space).
+      onClick={(e) => e.detail === 0 && cm.open(path, side, line, e.shiftKey)}
     >
       +
     </button>
@@ -403,7 +455,7 @@ export function LineComments({ path, side, line }: { path: string; side: Side; l
   const c = cm.composer;
   const composing = !!c && c.path === path && c.side === side && c.line === line;
   if (!threads.length && !drafts.length && !composing) return null;
-  const range = c?.startLine != null ? `lines ${c.startLine}–${c.line}` : `line ${line}`;
+  const range = c ? rangeLabel(c) : `line ${line}`;
   return (
     <tr className="comment-row">
       <td colSpan={3}>
@@ -414,7 +466,7 @@ export function LineComments({ path, side, line }: { path: string; side: Side; l
           <div className="cm-draft" key={d.id}>
             <div className="cm-meta">
               <span className="tag-pending">Pending</span>
-              {d.startLine != null ? <span>lines {d.startLine}–{d.line}</span> : null}
+              {d.startLine != null ? <span>{rangeLabel(d)}</span> : null}
               <button type="button" className="cm-btn link" onClick={() => cm.deleteDraft(d.id)}>
                 Delete
               </button>
@@ -424,8 +476,8 @@ export function LineComments({ path, side, line }: { path: string; side: Side; l
         ))}
         {composing ? (
           <Form
-            key={`${c.startLine ?? ""}-${c.line}`}
-            placeholder={`Comment on ${range}${side === "LEFT" ? " (removed)" : ""}…`}
+            key={`${c.startSide ?? ""}${c.startLine ?? ""}-${c.line}`}
+            placeholder={`Comment on ${range}${side === "LEFT" && c.startLine == null ? " (removed)" : ""}…`}
             autoFocus
             onCancel={cm.close}
             hint={cm.hasToken ? undefined : <TokenHint />}
