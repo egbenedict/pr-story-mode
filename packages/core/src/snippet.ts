@@ -241,7 +241,7 @@ export function walkthrough(step: StoryStep, snippets: Map<string, SnippetRow[]>
       }
       if (idx < 0) return;
     }
-    const chunk = take(atomId, idx);
+    const chunk = take(atomId, keepReplacement(rows, idx, line));
     if (chunk) beats[i].code.push(chunk);
   });
 
@@ -256,6 +256,24 @@ export function walkthrough(step: StoryStep, snippets: Map<string, SnippetRow[]>
     }
   }
   return { beats, snapped };
+}
+
+/**
+ * A changed line has the same number on both sides (old 53 removed, new 53 added), so a cut "at 53"
+ * can land between them. A cut on a removed line that added lines replace moves to the added line
+ * with that number, or to the end of the added lines, so a change is never shown half done.
+ * A cut inside a pure deletion stays where it is.
+ */
+function keepReplacement(rows: SnippetRow[], idx: number, line: number): number {
+  if (rows[idx].type !== "del") return idx;
+  let k = idx;
+  while (rows[k + 1]?.type === "del") k++;
+  if (rows[k + 1]?.type !== "add") return idx;
+  while (rows[k + 1]?.type === "add") {
+    k++;
+    if (rowNumber(rows[k]) === line) return k;
+  }
+  return k;
 }
 
 export function atomLabel(atom: ChangeAtom): string {

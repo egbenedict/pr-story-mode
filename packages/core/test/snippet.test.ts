@@ -93,6 +93,17 @@ describe("walkthrough", () => {
     expect(flat(w).map(rowNumber)).toEqual(nums.filter((n) => n !== undefined));
   });
 
+  it("doesn't cut between a removed line and the line that replaces it", () => {
+    // `int g` is old line 8 and new line 12; a cut "at 8" must not leave the added line for the next beat.
+    const g = atom("g", changedLines(file).filter((l) => (l.side === "LEFT" ? l.line === 8 : l.line === 12)));
+    const one = new Map([["g", atomSnippet(file, g, 0)]]);
+    const types = one.get("g")!.map((r) => r.type);
+    expect(types).toEqual(["del", "add"]);
+    const w = walkthrough({ atomIds: ["g"], label: "x", explanation: [{ text: "a", cites: [], through: { atomId: "g", line: 8 } }, { text: "b", cites: [] }] }, one);
+    expect(w.beats[0].code[0].rows.map((r) => r.type)).toEqual(["del", "add"]);
+    expect(w.beats[1].code).toEqual([]);
+  });
+
   it("puts everything after a beat with no cuts", () => {
     const w = walkthrough(step([null]), snippets);
     expect(w.beats[0].code[0].rows).toEqual(rows);
