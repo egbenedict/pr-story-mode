@@ -62,7 +62,9 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .raw-toggle[aria-pressed="true"], .step-raw[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .rawview { display: none; }
 .step.show-raw .rawview { display: block; }
-.step.show-raw .walk .atom { display: none; }
+/* Raw diff shows only the code, as GitHub's Files view does: no explanations or unchanged context. */
+.step.show-raw .walk, .step.show-raw details.context, .step.show-raw .override { display: none; }
+.raw-label { margin: 0 0 8px; font-weight: 600; }
 .diff { width: 100%; border-collapse: collapse; font: 12.5px/1.5 var(--mono); color: var(--code); tab-size: 4; }
 .diff.raw { display: none; }
 .rawview .diff.raw, .atom.show-raw .diff.raw { display: table; }

@@ -201,7 +201,7 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
     ${override}
     ${context}
     <div class="walk">${walk}${empties}</div>
-    <div class="rawview">${stepAtoms.filter((a) => (snippets.get(a.id) ?? []).length).map((a) => `<div class="atom">${atomHead(a, false)}${rawHunks(a)}</div>`).join("")}</div>
+    <div class="rawview"><p class="raw-label">${inline(s.label)}</p>${stepAtoms.filter((a) => (snippets.get(a.id) ?? []).length).map((a) => `<div class="atom">${atomHead(a, false)}${rawHunks(a)}</div>`).join("")}</div>
   </div>
 </section>`;
     })

@@ -537,6 +537,9 @@ function Step({ i, step, done }: { i: number; step: StoryStep; done: boolean }) 
         {/* Rendered only while shown, so comment threads and boxes never exist twice on the page. */}
         {raw ? (
           <div className="rawview">
+            <p className="raw-label">
+              <Inline text={step.label} />
+            </p>
             {withCode.map((a) => (
               <div className="atom" key={a.id}>
                 <AtomHead atom={a} continued={false} />
