@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atomizePR, buildGraph, classifyAtoms, EXPLAIN_SYSTEM, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
+import { atomizePR, buildGraph, classifyAtoms, EXPLAIN_SYSTEM, modelFailure, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
 import { MockProvider } from "@prstory/providers";
 import { createHost } from "../src/grammars";
 import { renderStoryHtml } from "../src/render";
@@ -114,6 +114,27 @@ describe("runPipeline", () => {
     expect(r.metrics.repairRounds).toBe(3);
     expect(r.coverage.ok).toBe(true);
     expect(r.metrics.undeclaredViolations).toBe(0);
+  });
+
+  it("reports a model that refuses every call, and doesn't count bad plans as model failures", async () => {
+    const refuse = () => {
+      throw new Error("400 Your credit balance is too low to access the Anthropic API.");
+    };
+    const broke = await runPipeline(pr, { host, provider: new MockProvider([refuse, refuse, refuse]) });
+    expect(broke.coverage.ok).toBe(true);
+    expect(broke.metrics.modelCalls).toEqual({ total: 2, failed: 2 }); // one order call, one explain window
+    expect(broke.metrics.providerErrors).toEqual(["400 Your credit balance is too low to access the Anthropic API."]);
+    expect(modelFailure(broke)).toMatch(/^Every model call failed: 400 Your credit balance/);
+
+    const { clamp, run, fmt } = await setup();
+    const explainDown = await runPipeline(pr, { host, provider: new MockProvider([plan([{ atomIds: [clamp, run], label: "Add and use clamp" }], [fmt]), refuse]) });
+    expect(modelFailure(explainDown)).toMatch(/^No step was explained: 400/);
+
+    const bad = plan([{ atomIds: ["nope"], label: "?" }], []);
+    const badPlans = await runPipeline(pr, { host, provider: new MockProvider([bad, bad, bad, bad, explainAll]) });
+    expect(badPlans.metrics.fallbackOrder).toBe(true);
+    expect(modelFailure(badPlans)).toBeNull();
+    expect(modelFailure(await runPipeline(pr, { host, provider: null }))).toBeNull();
   });
 
   it("asks for JSON in the prompt when the provider has no schema support", async () => {

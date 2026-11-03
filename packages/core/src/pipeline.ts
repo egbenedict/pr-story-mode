@@ -26,6 +26,10 @@ export type PipelineMetrics = {
   repairRounds: number;
   fallbackOrder: boolean;
   orderErrors: string[];
+  /** Distinct errors thrown by the model provider (auth, billing, rate limits, network), first 5. */
+  providerErrors: string[];
+  /** Model calls made and how many of them failed. */
+  modelCalls: { total: number; failed: number };
   orderOverrides: number;
   undeclaredViolations: number;
   summarized: { batches: number; missing: number } | null;
@@ -67,7 +71,8 @@ export async function runPipeline(
   const t0 = Date.now();
   const emit = opts.onEvent ?? (() => {});
   const usage: Required<Usage> = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-  const provider = opts.provider ? meter(opts.provider, usage) : null;
+  const calls = { total: 0, failed: 0, errors: [] as string[] };
+  const provider = opts.provider ? meter(opts.provider, usage, calls) : null;
 
   emit({ type: "stage", stage: "atomize" });
   const atoms = classifyAtoms(pr, await atomizePR(pr, opts.host));
@@ -138,6 +143,8 @@ export async function runPipeline(
       repairRounds: order.repairRounds,
       fallbackOrder: order.fallback,
       orderErrors: order.errors,
+      providerErrors: calls.errors,
+      modelCalls: { total: calls.total, failed: calls.failed },
       orderOverrides: steps.filter((s) => s.orderOverride).length,
       undeclaredViolations: dependencyViolations(order.plan, atoms, edges).length,
       summarized: order.summarized,
@@ -156,14 +163,36 @@ export async function runPipeline(
   };
 }
 
-/** Wrap a provider so every call's usage is added to `total`. */
-function meter(p: LLMProvider, total: Required<Usage>): LLMProvider {
+/**
+ * Why a story made with a model fell back to template text or dependency order, or null when the
+ * model did its part. Callers use it to warn, stop a benchmark, or skip caching.
+ */
+export function modelFailure(r: PipelineResult): string | null {
+  if (r.story.meta.provider === "none") return null;
+  const m = r.metrics;
+  if (m.modelCalls.total > 0 && m.modelCalls.failed === m.modelCalls.total) return `Every model call failed: ${m.providerErrors[0] ?? "unknown error"}`;
+  if (m.steps > 0 && m.missingExplanations === m.steps) return m.providerErrors.length ? `No step was explained: ${m.providerErrors[0]}` : "The model returned no usable explanations.";
+  if (m.fallbackOrder && m.providerErrors.length) return `The order fell back to dependency order: ${m.providerErrors[0]}`;
+  return null;
+}
+
+/** Wrap a provider so every call's usage is added to `total`, and failures are recorded in `calls`. */
+function meter(p: LLMProvider, total: Required<Usage>, calls: { total: number; failed: number; errors: string[] }): LLMProvider {
   return {
     id: p.id,
     model: p.model,
     capabilities: p.capabilities,
     async complete(req) {
-      const res = await p.complete(req);
+      calls.total++;
+      let res: Awaited<ReturnType<LLMProvider["complete"]>>;
+      try {
+        res = await p.complete(req);
+      } catch (err) {
+        calls.failed++;
+        const msg = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+        if (calls.errors.length < 5 && !calls.errors.includes(msg)) calls.errors.push(msg);
+        throw err;
+      }
       total.inputTokens += res.usage.inputTokens;
       total.outputTokens += res.usage.outputTokens;
       total.cacheReadTokens += res.usage.cacheReadTokens ?? 0;

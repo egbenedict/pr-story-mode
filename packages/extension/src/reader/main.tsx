@@ -1,4 +1,4 @@
-import { fetchPullHead, fetchPullRequest, GitHubError, parsePrUrl, READER_CSS, runPipeline, type LLMProvider, type PipelineEvent, type PipelineResult, type PRInput, type StoryStep, type Usage } from "@prstory/core";
+import { fetchPullHead, fetchPullRequest, GitHubError, modelFailure, parsePrUrl, READER_CSS, runPipeline, type LLMProvider, type PipelineEvent, type PipelineResult, type PRInput, type StoryStep, type Usage } from "@prstory/core";
 import { createProvider, estimateCost } from "@prstory/providers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -39,14 +39,6 @@ type Phase =
   | { kind: "error"; message: string; github?: Pick<GitHubError, "kind" | "resetAt">; hasToken?: boolean };
 
 type Live = { view: StoryView; writing: string | null; usage: Required<Usage>; model: string; provider: string; result?: PipelineResult; stale?: string; problem?: string };
-
-/** Why a story made with a model fell back to template text, or null when the model did its part. */
-function modelProblem(r: PipelineResult): string | null {
-  const providerError = r.metrics.orderErrors.find((e) => e.startsWith("Provider error:"));
-  if (providerError) return `The model couldn't be used, so this story shows dependency order and template text. ${providerError.replace(/^Provider error:\s*/, "")}`;
-  if (r.metrics.steps > 0 && r.metrics.missingExplanations === r.metrics.steps) return "The model returned no usable explanations, so steps show template text.";
-  return null;
-}
 
 function errorPhase(err: unknown, settings: Settings | null): Phase {
   const message = err instanceof Error ? err.message : String(err);
@@ -165,7 +157,8 @@ function App() {
           }
         },
       });
-      const problem = base ? modelProblem(result) : null;
+      const failure = base ? modelFailure(result) : null;
+      const problem = failure ? `${failure} The story shows template text where the model didn't answer.` : null;
       setLive({ view: viewOf(pr, result), writing: null, usage: result.metrics.usage, model, provider: providerId, result, problem: problem ?? undefined });
       // A story the model failed on is not kept, so the next open tries the model again.
       if (!problem) await putStory({ key: storyKey(pr.repo ?? ref.repo, pr.number), headSha: pr.headSha, savedAt: Date.now(), pr, result });

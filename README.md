@@ -47,7 +47,7 @@ To work on the reader without loading the extension, serve `packages/extension/d
 |---|---|
 | `story <pr-url>` / `story --repo --base --head` | Build a story and write the HTML reader |
 | `atoms --repo --base --head` | Print the change atoms and dependency edges (debugging) |
-| `bench --repo <dir> [--count 20] [--mode merges\|commits]` | Run the pipeline over recent merged PRs and check the coverage guarantee |
+| `bench --repo <dir> [--count 20] [--mode merges\|commits]` | Run the pipeline over recent merged PRs and check the coverage guarantee. With a model it records tokens and cost per PR, and stops at the first PR where the model fails (exit code 3), so a billing or auth problem can't produce a run of template text |
 
 Provider options: `--provider anthropic|openai|openai-compatible|none`, `--model`, `--base-url`, `--effort`. Context options: `--repo <clone>` with a PR URL, `--no-context`. The default model is `claude-opus-5-5`. `openai-compatible` covers self-hosted servers such as Ollama and vLLM (`--base-url http://localhost:11434/v1 --model llama3.3`).
 
@@ -108,6 +108,6 @@ With context retrieval from the local clone (still no LLM), coverage holds on al
 
 ## Not done yet
 
-- Phase 2: context outside the PR's files for GitHub PRs without a local clone; running the benchmark end to end with a model (needs an API key) to measure grounding, repair rounds and cost.
+- Phase 2: context outside the PR's files for GitHub PRs without a local clone; the full 60-PR benchmark with a model. A 15-PR pilot on Opus 5.5 (5 each from Flask, ky and luau) cost $3.75: coverage held on all 15, no fallbacks or failed calls, 2 repair rounds, at most 5.4% of citations dropped by the grounding check, a median of 29 s to the first explained step. The full run should cost about $15.
 - Phase 3: comment round-trip to GitHub reviews; context from unchanged files for PRs without a local clone (the extension only uses the PR's own files for now); Bedrock, Vertex and Azure adapters; enterprise policy settings; re-using cached atoms when new commits land. The extension has not yet been tested loaded in Chrome, only its reader page served locally and its content script injected by hand on github.com.
 - The 200 to 500 PR benchmark, model comparison and reviewer study (Phase 4).

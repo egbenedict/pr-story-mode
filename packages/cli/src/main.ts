@@ -10,6 +10,7 @@ import {
   buildGraph,
   fetchPullRequest,
   lineCounts,
+  modelFailure,
   parsePrUrl,
   runPipeline,
   type LLMProvider,
@@ -176,7 +177,10 @@ async function storyCmd(target: string | undefined, v: Values) {
 
   printSummary(result, cost);
   console.log(`\nWrote ${join(out, "story.html")}`);
+  const failure = modelFailure(result);
+  if (failure) process.stderr.write(`\nWarning: ${failure}\n`);
   if (!result.coverage.ok) process.exitCode = 2;
+  else if (failure) process.exitCode = 3;
 }
 
 function printSummary(r: PipelineResult, cost: number | null) {
@@ -210,6 +214,7 @@ async function benchCmd(v: Values) {
   const rows: Record<string, unknown>[] = [];
   let ran = 0;
   let passed = 0;
+  let modelStop: string | null = null;
   for (const c of candidates) {
     if (ran >= count) break;
     let pr: PRInput;
@@ -224,6 +229,7 @@ async function benchCmd(v: Values) {
     const r = await runPipeline(pr, { host, provider, contextSource: v["no-context"] === true ? null : localContextSource(dir, pr.headSha), noContext: v["no-context"] === true });
     if (r.coverage.ok) passed++;
     const m = r.metrics;
+    const failure = modelFailure(r);
     const row = {
       sha: c.sha.slice(0, 10),
       title: c.subject.slice(0, 60),
@@ -253,10 +259,20 @@ async function benchCmd(v: Values) {
       cacheWriteTokens: m.usage.cacheWriteTokens,
       firstStepMs: m.ms.firstStep ?? "",
       ms: m.ms.total,
+      modelCalls: m.modelCalls.total,
+      failedModelCalls: m.modelCalls.failed,
+      modelError: m.providerErrors[0] ?? "",
     };
     rows.push(row);
     console.log(`${row.coverage === "ok" ? "✓" : "✗"} ${row.sha} ${String(row.lines).padStart(5)} lines ${String(row.atoms).padStart(4)} atoms ${String(row.steps).padStart(4)} steps  ${row.title}`);
     if (!r.coverage.ok) console.log(`    missing: ${r.coverage.missing.slice(0, 5).join(", ")}  duplicated: ${r.coverage.duplicated.slice(0, 5).join(", ")}`);
+    // A model that stops answering (billing, auth, rate limits) would make the rest of the run
+    // measure template text, so stop and keep what ran.
+    if (failure) {
+      modelStop = failure;
+      console.log(`    model failed: ${failure}`);
+      break;
+    }
   }
 
   const out = resolve(str(v, "out") ?? join("bench", dir.split("/").pop()!));
@@ -268,7 +284,9 @@ async function benchCmd(v: Values) {
     writeFileSync(join(out, "bench.csv"), csv);
   }
   console.log(`\nCoverage held on ${passed}/${ran} PRs. Results in ${out}`);
+  if (modelStop) console.log(`Stopped after ${ran} PR(s) because the model failed. Fix the cause and run again.`);
   if (passed !== ran) process.exitCode = 2;
+  else if (modelStop) process.exitCode = 3;
 }
 
 async function atomsCmd(target: string | undefined, v: Values) {
