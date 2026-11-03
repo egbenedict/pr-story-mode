@@ -125,6 +125,9 @@ function App() {
       const pr = await fetchPullRequest(ref, gh);
       // Starts downloading likely context files now, while the model orders the steps.
       const contextSource = githubContextSource(ref, gh, pr);
+      // A story for an earlier commit lets unchanged steps keep their explanations.
+      const cached = await getStory(storyKey(pr.repo ?? `${ref.owner}/${ref.repo}`, pr.number));
+      const previous = cached && cached.headSha !== pr.headSha ? { pr: cached.pr, atoms: cached.result.atoms, story: cached.result.story } : null;
       const base = withModel ? createProvider(providerConfig(settings)) : null;
       const usage: Required<Usage> = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
       const model = base?.model ?? "none";
@@ -144,6 +147,7 @@ function App() {
         host: createBrowserHost(),
         provider,
         contextSource,
+        previous,
         onEvent: (e) => {
           const text = stageText(e, atomCount);
           if (text) setPhase({ kind: "loading", stage: text });
@@ -194,7 +198,10 @@ function App() {
       }
       if (cached) {
         const r = cached.result;
-        const stale = head && head !== cached.headSha ? `New commits were pushed since this story was written (it covers ${cached.headSha.slice(0, 7)}; the PR is now at ${head.slice(0, 7)}).` : undefined;
+        const stale =
+          head && head !== cached.headSha
+            ? `New commits were pushed since this story was written (it covers ${cached.headSha.slice(0, 7)}; the PR is now at ${head.slice(0, 7)}). Regenerating keeps the steps whose code didn't change and explains only the rest.`
+            : undefined;
         setLive({ view: viewOf(cached.pr, r), writing: null, usage: r.metrics.usage, model: r.story.meta.model, provider: r.story.meta.provider, result: r, stale });
         return;
       }
@@ -241,6 +248,12 @@ function App() {
         Generated with {r.story.meta.provider === "none" ? "no model (dependency order and template text)" : `${r.story.meta.provider} · ${r.story.meta.model}`} · {costText(r.story.meta.model, r.metrics.usage)} · {r.story.meta.repairRounds} repair round
         {r.story.meta.repairRounds === 1 ? "" : "s"}
         {r.metrics.fallbackOrder && r.story.meta.provider !== "none" ? " · fell back to dependency order" : ""}
+        {r.story.meta.reused ? (
+          <>
+            <br />
+            Updated from the story for {r.story.meta.reused.from.slice(0, 7)}: {r.story.meta.reused.steps} of {r.story.steps.length} steps kept, {r.story.steps.length - r.story.meta.reused.steps} explained again.
+          </>
+        ) : null}
       </>
     ) : (
       <>Writing with {live.provider === "none" ? "no model" : `${live.provider} · ${live.model}`} · {costText(live.model, live.usage)} so far</>

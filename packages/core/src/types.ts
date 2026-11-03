@@ -110,7 +110,14 @@ export type Story = {
   summary: string; // two or three sentences shown at the top
   steps: StoryStep[];
   mechanical: string[]; // atom IDs, listed at the end
-  meta: { model: string; provider: string; repairRounds: number; tokens: number };
+  meta: {
+    model: string;
+    provider: string;
+    repairRounds: number;
+    tokens: number;
+    /** Set when the story was updated from one for an earlier commit: steps carried over, and that commit. */
+    reused?: { steps: number; from: string };
+  };
 };
 
 // ---- LLM provider interface (implemented in @prstory/providers) ----

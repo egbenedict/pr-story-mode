@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atomizePR, buildGraph, classifyAtoms, EXPLAIN_SYSTEM, modelFailure, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
+import { atomizePR, buildGraph, classifyAtoms, EXPLAIN_SYSTEM, modelFailure, planFromPrevious, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
 import { MockProvider } from "@prstory/providers";
 import { createHost } from "../src/grammars";
 import { renderStoryHtml } from "../src/render";
@@ -215,5 +215,77 @@ describe("explanation voice", () => {
     expect(EXPLAIN_SYSTEM).toContain("You did not write the pull request");
     expect(EXPLAIN_SYSTEM).toContain("third person");
     expect(EXPLAIN_SYSTEM).toMatch(/Never use "I", "we"/);
+  });
+});
+
+describe("reusing the previous story after a push", () => {
+  const header = "// header\n// more\n// lines\n\n";
+  const util1 = `${header}export const x = 1;\n`;
+  const utilHead = `${header}export const x = 1;\n\nexport function clamp(v: number) {\n  return Math.min(v, 10);\n}\n`;
+  const v1 = makePR(
+    { "src/util.ts": util1, "src/main.ts": "export function run() {\n  return 1;\n}\n" },
+    { "src/util.ts": utilHead, "src/main.ts": "export function run() {\n  return clamp(1);\n}\n" },
+    { title: "Clamp run() output" },
+  );
+  // The base gained a line above clamp (a rebase), run() changed again, and twice() is new.
+  const v2 = makePR(
+    { "src/util.ts": `// new first line\n${util1}`, "src/main.ts": "export function run() {\n  return 1;\n}\n" },
+    {
+      "src/util.ts": `// new first line\n${utilHead}`,
+      "src/main.ts": "export function run() {\n  return clamp(2);\n}\n",
+      "src/extra.ts": "export function twice(v: number) {\n  return clamp(v) * 2;\n}\n",
+    },
+    { title: "Clamp run() output" },
+  );
+
+  async function first() {
+    const atoms = classifyAtoms(v1, await atomizePR(v1, host));
+    const id = (s: string) => atoms.find((a) => a.symbolPath.includes(s))!.id;
+    const provider = new MockProvider([plan([{ atomIds: [id("clamp")], label: "Add clamp" }, { atomIds: [id("run")], label: "Use clamp in run" }], []), explainAll]);
+    const r = await runPipeline(v1, { host, provider });
+    return { pr: v1, atoms: r.atoms, story: r.story };
+  }
+
+  it("keeps unchanged steps with moved line numbers, and explains only changed and new code, without ordering again", async () => {
+    const prev = await first();
+    const provider = new MockProvider([explainAll]);
+    const r = await runPipeline(v2, { host, provider, previous: prev });
+
+    expect(provider.requests).toHaveLength(1); // one explain call, no order call
+    expect(provider.requests[0].system).toBe(EXPLAIN_SYSTEM);
+    expect(r.coverage.ok).toBe(true);
+    expect(r.story.summary).toBe(prev.story.summary);
+    expect(r.story.meta.reused).toEqual({ steps: 1, from: v1.headSha });
+    expect(r.metrics.reusedSteps).toBe(1);
+
+    const labels = r.story.steps.map((s) => s.label);
+    expect(labels).toEqual(["Add clamp", "Add twice", "Use clamp in run"]); // twice right after what it uses
+    const asked = [...provider.requests[0].messages[0].content.matchAll(/^## Step (\d+):/gm)].map((m) => +m[1]);
+    expect(asked).toEqual([2, 3]);
+
+    // The clamp step is the old explanation, on the new atom ID and one line lower.
+    const oldStep = prev.story.steps[0];
+    const newStep = r.story.steps[0];
+    expect(newStep.explanation.map((b) => b.text)).toEqual(oldStep.explanation.map((b) => b.text));
+    const clampId = r.atoms.find((a) => a.symbolPath.includes("clamp"))!.id;
+    expect(newStep.atomIds).toEqual([clampId]);
+    expect(newStep.explanation[0].cites[0]).toEqual({ atomId: clampId, lines: [oldStep.explanation[0].cites[0].lines[0] + 1, oldStep.explanation[0].cites[0].lines[1] + 1] });
+    expect(newStep.explanation[0].through).toEqual({ atomId: clampId, line: oldStep.explanation[0].through!.line + 1 });
+  });
+
+  it("orders from scratch when the previous story came from another model, or most of the code changed", async () => {
+    const prev = await first();
+    const other = { ...prev, story: { ...prev.story, meta: { ...prev.story.meta, model: "another-model" } } };
+    const atoms = classifyAtoms(v2, await atomizePR(v2, host));
+    const id = (s: string) => atoms.find((a) => a.symbolPath.includes(s))!.id;
+    const fresh = () => new MockProvider([plan([{ atomIds: [id("clamp")], label: "Add clamp" }, { atomIds: [id("twice")], label: "Add twice" }, { atomIds: [id("run")], label: "Use it" }], []), explainAll]);
+    const p1 = fresh();
+    const r1 = await runPipeline(v2, { host, provider: p1, previous: other });
+    expect(p1.requests).toHaveLength(2);
+    expect(r1.story.meta.reused).toBeUndefined();
+
+    const edges = buildGraph(atoms);
+    expect(planFromPrevious(prev, v2, atoms, edges, { maxChangedShare: 0.3 })).toBeNull(); // 2 of 3 steps changed
+    expect(planFromPrevious(prev, v2, atoms, edges)?.changed).toEqual([1, 2]);
   });
 });

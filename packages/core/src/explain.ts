@@ -102,6 +102,8 @@ export async function explainSteps(
   provider: LLMProvider | null,
   onStep?: (index: number, step: StoryStep) => void,
   context: ContextSnippet[][] = [],
+  /** Steps already explained (from a previous story); only the others are sent to the model. */
+  reuse: Map<number, StoryStep> = new Map(),
 ): Promise<{ steps: StoryStep[]; stats: ExplainStats }> {
   const byId = new Map(atoms.map((a) => [a.id, a]));
   const files = new Map(pr.files.map((f) => [f.path, f]));
@@ -144,10 +146,19 @@ export async function explainSteps(
   const budget = Math.max(2000, Math.floor(provider.capabilities.maxContextTokens * 0.3) - estimateTokens(sharedPrefix));
   const total = { tokens: 0 };
 
-  for (const win of windows(stepTexts, Math.min(budget, 30000))) {
+  for (const [i, step] of reuse) {
+    steps[i] = step;
+    onStep?.(i, step);
+  }
+  const todo = plan.steps.map((_, i) => i).filter((i) => !reuse.has(i));
+  const wins = windows(todo.map((i) => stepTexts[i]), Math.min(budget, 30000)).map((w) => w.map((k) => todo[k]));
+
+  for (const win of wins) {
     stats.windows++;
     const prev = win[0] > 0 ? `The reader has just finished step ${win[0]} (${plan.steps[win[0] - 1].label}).\n\n` : "";
-    const content = `${prev}Write the explanations for steps ${win[0] + 1} to ${win[win.length - 1] + 1}.\n\n${win.map((i) => stepTexts[i]).join("\n\n")}`;
+    const consecutive = win.every((i, k) => k === 0 || i === win[k - 1] + 1);
+    const which = win.length === 1 ? `step ${win[0] + 1}` : consecutive ? `steps ${win[0] + 1} to ${win[win.length - 1] + 1}` : `steps ${win.slice(0, -1).map((i) => i + 1).join(", ")} and ${win[win.length - 1] + 1}`;
+    const content = `${prev}Write the explanations for ${which}.\n\n${win.map((i) => stepTexts[i]).join("\n\n")}`;
     let json: unknown;
     try {
       const res = await completeJson(provider, {
