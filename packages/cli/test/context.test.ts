@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { atomizePR, classifyAtoms, isTestPath, retrieveContext, runPipeline, type CompletionRequest, type ContextSnippet } from "@prstory/core";
+import { atomizePR, classifyAtoms, isTestPath, remoteContextSource, retrieveContext, runPipeline, type CompletionRequest, type ContextSource, type ContextSnippet } from "@prstory/core";
+import { execFileSync } from "node:child_process";
 import { MockProvider } from "@prstory/providers";
 import { createHost } from "../src/grammars";
 import { localContextSource } from "../src/local";
@@ -64,10 +65,11 @@ export function total(items: number[]): number {
 afterAll(() => repo.cleanup());
 const pr = repo.pr;
 
-async function contextFor(sym: string, withSource: boolean, maxSnippetsPerStep = 3) {
+async function contextFor(sym: string, withSource: boolean | ContextSource, maxSnippetsPerStep = 3) {
   const atoms = classifyAtoms(pr, await atomizePR(pr, host));
   const steps = atoms.filter((a) => !a.mechanical).map((a) => ({ atomIds: [a.id] }));
-  const { context, stats } = await retrieveContext(pr, atoms, steps, host, { source: withSource ? localContextSource(repo.dir, pr.headSha) : null, maxSnippetsPerStep });
+  const source = typeof withSource === "object" ? withSource : withSource ? localContextSource(repo.dir, pr.headSha) : null;
+  const { context, stats } = await retrieveContext(pr, atoms, steps, host, { source, maxSnippetsPerStep });
   const i = steps.findIndex((s) => atoms.find((a) => a.id === s.atomIds[0])!.symbolPath.includes(sym));
   return { ctx: context[i] as ContextSnippet[], stats };
 }
@@ -107,6 +109,50 @@ describe("context retrieval", () => {
     const call = ctx.find((c) => c.within === "checkout")!;
     expect(call.called).toBe(true);
     expect(call.head).toBeUndefined(); // short enough to show whole
+  });
+
+  it("finds the same context from a repository it can only list and read, as on GitHub without a clone", async () => {
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo.dir, ...args], { encoding: "utf8" });
+    const reads: string[] = [];
+    const source = remoteContextSource(
+      pr,
+      async () =>
+        git("ls-tree", "-r", "-l", pr.headSha)
+          .trim()
+          .split("\n")
+          .map((l) => {
+            const [meta, path] = l.split("\t");
+            return { path, size: +meta.trim().split(/\s+/)[3] };
+          }),
+      async (path) => (reads.push(path), git("show", `${pr.headSha}:${path}`)),
+    );
+    const { ctx } = await contextFor("total", source);
+    expect(ctx.find((c) => c.symbol === "clampPrice")).toMatchObject({ reason: "definition", file: "src/limits.ts", start: 1, end: 4 });
+    expect(ctx.find((c) => c.reason === "caller")).toMatchObject({ symbol: "total", file: "src/checkout.ts", within: "checkout" });
+    // limits.ts comes first: price.ts imports it. The README is never read.
+    expect(source.fetched()[0]).toBe("src/limits.ts");
+    expect(reads).not.toContain("README.md");
+  });
+
+  it("doesn't call a header's declaration of the changed function a caller", async () => {
+    // Shaped like Luau's lbuffer.h: the declaration hides behind a macro defined elsewhere.
+    const c = makeRepo(
+      {
+        "src/lbuf.h": '#pragma once\n\n#include "lobject.h"\n\nLUAI_FUNC Buffer* newbuf(lua_State* L, size_t s);\nLUAI_FUNC void freebuf(lua_State* L, Buffer* u);\n',
+        "src/lbuf.cpp": '#include "lbuf.h"\n\nBuffer* newbuf(lua_State* L, size_t s)\n{\n    return alloc(L, s);\n}\n',
+        "src/lapi.cpp": '#include "lbuf.h"\n\nvoid* lua_newbuffer(lua_State* L, size_t sz)\n{\n    Buffer* b = newbuf(L, sz);\n    return b->data;\n}\n',
+      },
+      { "src/lbuf.cpp": '#include "lbuf.h"\n\nBuffer* newbuf(lua_State* L, size_t s)\n{\n    if (s > MAX)\n        fail(L);\n    return alloc(L, s);\n}\n' },
+    );
+    try {
+      const atoms = classifyAtoms(c.pr, await atomizePR(c.pr, host));
+      const steps = atoms.filter((a) => !a.mechanical).map((a) => ({ atomIds: [a.id] }));
+      const { context } = await retrieveContext(c.pr, atoms, steps, host, { source: localContextSource(c.dir, c.pr.headSha) });
+      const callers = context.flat().filter((x) => x.reason === "caller");
+      expect(callers.map((x) => [x.file, x.within])).toEqual([["src/lapi.cpp", "lua_newbuffer"]]);
+    } finally {
+      c.cleanup();
+    }
   });
 
   it("recognises test paths", () => {

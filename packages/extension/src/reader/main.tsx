@@ -1,4 +1,4 @@
-import { fetchPullHead, fetchPullRequest, GitHubError, modelFailure, parsePrUrl, READER_CSS, runPipeline, type LLMProvider, type PipelineEvent, type PipelineResult, type PRInput, type StoryStep, type Usage } from "@prstory/core";
+import { fetchPullHead, fetchPullRequest, GitHubError, githubContextSource, modelFailure, parsePrUrl, READER_CSS, runPipeline, type LLMProvider, type PipelineEvent, type PipelineResult, type PRInput, type StoryStep, type Usage } from "@prstory/core";
 import { createProvider, estimateCost } from "@prstory/providers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -121,7 +121,10 @@ function App() {
     try {
       setLive(null);
       setPhase({ kind: "loading", stage: "Reading the pull request from GitHub…" });
-      const pr = await fetchPullRequest(ref, { token: settings.githubToken || undefined });
+      const gh = { token: settings.githubToken || undefined };
+      const pr = await fetchPullRequest(ref, gh);
+      // Starts downloading likely context files now, while the model orders the steps.
+      const contextSource = githubContextSource(ref, gh, pr);
       const base = withModel ? createProvider(providerConfig(settings)) : null;
       const usage: Required<Usage> = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
       const model = base?.model ?? "none";
@@ -140,7 +143,7 @@ function App() {
       const result = await runPipeline(pr, {
         host: createBrowserHost(),
         provider,
-        contextSource: null, // unchanged files outside the PR are not fetched yet
+        contextSource,
         onEvent: (e) => {
           const text = stageText(e, atomCount);
           if (text) setPhase({ kind: "loading", stage: text });

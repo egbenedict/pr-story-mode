@@ -1,5 +1,6 @@
 import { parseUnifiedDiff } from "./diff";
 import { isGeneratedPath, isLockfile, packForPath } from "./languages";
+import { remoteContextSource, type RemoteContextOptions } from "./remote-context";
 import type { PRFile, PRInput, Side } from "./types";
 
 export type PRRef = { host: string; owner: string; repo: string; number: number };
@@ -137,17 +138,7 @@ export async function fetchPullRequest(ref: PRRef, opts: GitHubOptions = {}): Pr
 
   const files: PRFile[] = parseUnifiedDiff(diffText);
   const needsText = (p: string) => !!packForPath(p) && !isLockfile(p) && !isGeneratedPath(p);
-  const rawBase = opts.rawBase === undefined ? (!opts.token && !opts.apiBase && ref.host === "github.com" ? RAW_BASE : null) : opts.rawBase;
-  const f = opts.fetchImpl ?? fetch;
-  const raw = async (path: string, sha: string) => {
-    const enc = path.split("/").map(encodeURIComponent).join("/");
-    if (rawBase) {
-      // Falls back to the API when the raw host fails (blocked network, odd paths).
-      const res = await f(`${rawBase}/${ref.owner}/${ref.repo}/${sha}/${enc}`).catch(() => null);
-      if (res?.ok) return res.text();
-    }
-    return (await get(`${repoPath}/contents/${enc}?ref=${sha}`, "application/vnd.github.raw")).text();
-  };
+  const raw = fileReader(ref, opts);
 
   const jobs: (() => Promise<void>)[] = [];
   for (const file of files) {
@@ -179,6 +170,44 @@ export async function fetchPullRequest(ref: PRRef, opts: GitHubOptions = {}): Pr
     files,
     ...(issues.length ? { issues } : {}),
   };
+}
+
+/**
+ * Reads a file at a commit. Without a token on github.com it uses the raw host, which doesn't count
+ * against the API's hourly limit, and falls back to the contents API when that fails.
+ */
+function fileReader(ref: PRRef, opts: GitHubOptions) {
+  const get = githubGetter(ref, opts);
+  const rawBase = opts.rawBase === undefined ? (!opts.token && !opts.apiBase && ref.host === "github.com" ? RAW_BASE : null) : opts.rawBase;
+  const f = opts.fetchImpl ?? fetch;
+  return async (path: string, sha: string) => {
+    const enc = path.split("/").map(encodeURIComponent).join("/");
+    if (rawBase) {
+      // Falls back to the API when the raw host fails (blocked network, odd paths).
+      const res = await f(`${rawBase}/${ref.owner}/${ref.repo}/${sha}/${enc}`).catch(() => null);
+      if (res?.ok) return res.text();
+    }
+    return (await get(`/repos/${ref.owner}/${ref.repo}/contents/${enc}?ref=${sha}`, "application/vnd.github.raw")).text();
+  };
+}
+
+/**
+ * Context from unchanged files of the PR's repository at its head commit, without a clone: one API
+ * request lists the repository, then likely files are read (see remoteContextSource).
+ */
+export function githubContextSource(ref: PRRef, opts: GitHubOptions, pr: PRInput, ctx: RemoteContextOptions = {}) {
+  const get = githubGetter(ref, opts);
+  const raw = fileReader(ref, opts);
+  return remoteContextSource(
+    pr,
+    async () => {
+      const res = await get(`/repos/${ref.owner}/${ref.repo}/git/trees/${pr.headSha}?recursive=1`);
+      const j = (await res.json()) as { tree?: { path: string; type: string; size?: number }[] };
+      return (j.tree ?? []).filter((t) => t.type === "blob").map((t) => ({ path: t.path, size: t.size ?? 0 }));
+    },
+    (path) => raw(path, pr.headSha),
+    ctx,
+  );
 }
 
 async function runLimited(jobs: (() => Promise<void>)[], limit: number) {

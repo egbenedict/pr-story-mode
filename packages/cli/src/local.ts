@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { isGeneratedPath, isLockfile, packForPath, parseUnifiedDiff, type ContextSource, type PRFile, type PRInput } from "@prstory/core";
+import { definedOnLine, isGeneratedPath, isLockfile, packForPath, parseUnifiedDiff, type ContextSource, type PRFile, type PRInput } from "@prstory/core";
 
 function git(repo: string, ...args: string[]): string {
   return execFileSync("git", ["-C", repo, "-c", "core.quotepath=off", ...args], {
@@ -73,22 +73,6 @@ function parseLog(out: string) {
 }
 
 // ---------- context lookups outside the PR ----------
-
-const KEYWORD_DEF = /\b(?:def|class|function|interface|type|enum|struct|union|trait|fn|func|const|let|var|val|namespace|typedef|module|object|record|protocol)\s+(?:\([^)]*\)\s*)?(?:[\w$]+(?:::|\.))*([\w$]+)/g;
-const C_FUNC_DEF = /^[A-Za-z_][\w:<>,\s*&]*?[\s*&:]([A-Za-z_]\w*)\s*\(/; // unindented `int foo(`, `Foo::bar(`
-const JAVA_METHOD = /^\s+(?:(?:public|private|protected|static|final|abstract|synchronized|override|virtual|inline)\s+)+[\w<>\[\],\s]*?\s([A-Za-z_]\w*)\s*\(/;
-const MACRO_DEF = /^\s*#\s*define\s+([A-Za-z_]\w*)/;
-
-/** Symbol names that a source line defines, by rough language-agnostic patterns. */
-export function definedOnLine(text: string): string[] {
-  const out: string[] = [];
-  for (const m of text.matchAll(KEYWORD_DEF)) out.push(m[1]);
-  for (const re of [C_FUNC_DEF, JAVA_METHOD, MACRO_DEF]) {
-    const m = re.exec(text);
-    if (m) out.push(m[1]);
-  }
-  return out;
-}
 
 /**
  * Context lookups in a local clone at `sha`, with `git grep`: definitions are found by grepping

@@ -17,6 +17,23 @@ export type ContextSource = {
   readFile(path: string): Promise<string | undefined>;
 };
 
+// Rough, language-agnostic patterns for lines that define a name, used by sources that search text.
+const KEYWORD_DEF = /\b(?:def|class|function|interface|type|enum|struct|union|trait|fn|func|const|let|var|val|namespace|typedef|module|object|record|protocol)\s+(?:\([^)]*\)\s*)?(?:[\w$]+(?:::|\.))*([\w$]+)/g;
+const C_FUNC_DEF = /^[A-Za-z_][\w:<>,\s*&]*?[\s*&:]([A-Za-z_]\w*)\s*\(/; // unindented `int foo(`, `Foo::bar(`
+const JAVA_METHOD = /^\s+(?:(?:public|private|protected|static|final|abstract|synchronized|override|virtual|inline)\s+)+[\w<>\[\],\s]*?\s([A-Za-z_]\w*)\s*\(/;
+const MACRO_DEF = /^\s*#\s*define\s+([A-Za-z_]\w*)/;
+
+/** Symbol names that a source line defines, by rough language-agnostic patterns. */
+export function definedOnLine(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(KEYWORD_DEF)) out.push(m[1]);
+  for (const re of [C_FUNC_DEF, JAVA_METHOD, MACRO_DEF]) {
+    const m = re.exec(text);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
 export type ContextOptions = {
   source?: ContextSource | null;
   maxSnippetsPerStep?: number; // default 3
@@ -52,7 +69,7 @@ const CALLER_WINDOW = 5; // lines on each side of a call
 const MAX_DEFS_PER_NAME = 3; // a name defined in more places than this is too ambiguous to show
 
 /** Languages whose files can refer to each other's symbols. */
-function familyOf(pack: LanguagePack): string {
+export function familyOf(pack: LanguagePack): string {
   if (["typescript", "tsx", "javascript"].includes(pack.id)) return "js";
   if (["c", "cpp"].includes(pack.id)) return "c";
   return pack.id;
@@ -194,7 +211,9 @@ export async function retrieveContext(
 
     // Existing callers of what the step modifies.
     for (const d of new Set(modifiedDefs[i])) {
-      const callers = leaves.filter((u) => u.family === family && u.name !== d && (stepIsTest || !isTestPath(u.file)) && refsOf(u).has(d));
+      // A declaration of the same function (a C prototype in a header) is not a caller.
+      const declares = (u: Unit) => definedOnLine(index.get(u.file)!.lines[u.start - 1] ?? "").includes(bareName(d));
+      const callers = leaves.filter((u) => u.family === family && u.name !== d && (stepIsTest || !isTestPath(u.file)) && refsOf(u).has(d) && !declares(u));
       callers.sort((a, b) => near(b.file) - near(a.file) || a.end - a.start - (b.end - b.start));
       callers.slice(0, 2).forEach((u, k) => {
         const fi = index.get(u.file)!;
