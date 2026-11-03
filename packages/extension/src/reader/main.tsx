@@ -80,16 +80,7 @@ main { overflow: auto; height: calc(100vh - 41px); }
 .stages li.todo .stage-name { color: var(--muted); }
 .stages li.active .stage-name { font-weight: 600; }
 .stage-detail { display: block; font-size: 12.5px; color: var(--muted); margin-top: 1px; animation: fade-up .3s ease; }
-.plan-draft { margin-top: 10px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font-size: 13.5px; line-height: 1.55; max-height: 300px; overflow: auto; }
-.plan-summary { margin: 0 0 8px; }
-.plan-summary:last-child { margin: 0; }
-.plan-labels { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
-.plan-labels li { display: flex; gap: 8px; animation: fade-up .35s ease; }
-.plan-labels .n { flex: none; min-width: 18px; color: var(--muted); font: 11.5px/1.9 var(--mono); text-align: right; }
 .prep.finished .prep-bar { animation: none; background: var(--accent); background-size: 100% 100%; }
-.first-draft .first-label { display: flex; gap: 8px; font-weight: 600; margin-bottom: 6px; }
-.first-draft .first-label .n { color: var(--muted); font: 11.5px/1.9 var(--mono); }
-.first-draft p + p { white-space: pre-wrap; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 .layout { animation: fade-in .35s ease; }
 .prep-foot { margin: 4px 0 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -116,7 +107,7 @@ main { overflow: auto; height: calc(100vh - 41px); }
 .rail li.writing a { color: var(--ink); opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
-  .layout, .prep-bar, .stages .dot, .caret, .skeleton span, .pulse, .rail-state, .pending-step .step-marker, .plan-labels li, .draft p, .stage-detail { animation: none !important; }
+  .layout, .prep-bar, .stages .dot, .caret, .skeleton span, .pulse, .rail-state, .pending-step .step-marker, .draft p, .stage-detail { animation: none !important; }
   .write-progress > span { transition: none; }
 }
 .banner { border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 8px; padding: 8px 12px; margin: 0 0 20px; font-size: 13.5px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -138,12 +129,10 @@ type Prep = {
   stage: 0 | 1 | 2 | 3 | 4 | 5;
   pr?: { title: string; ref: string; files: number; add: number; del: number };
   atoms?: { n: number; mechanical: number };
-  plan?: { summary: string; labels: string[] };
+  planned?: number; // steps the model has planned so far
   note?: string; // "Fixing the order (round 2)", "Summarizing changes (3 of 8)"
   steps?: number; // once the order is settled
   context?: { snippets: number; steps: number; extraFiles: number };
-  /** The first step's label, and its words so far while it is written. */
-  first?: { label: string; draft?: string };
   written?: number; // steps written by the time the card finishes
   model: string | null; // null: no model
   usage: Required<Usage>;
@@ -271,8 +260,6 @@ function costShort(model: string, u: Required<Usage>): string {
 /** Cost text, or "" before anything has been used. */
 const costSoFar = (model: string, u: Required<Usage>) => (u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens ? costText(model, u) : "");
 
-/** Close a backtick left open in text that is still being written, so it renders as code. */
-const closeTicks = (t: string) => (t.split("`").length % 2 === 0 ? `${t}\``  : t);
 
 /** `?demo` on a local preview server: a scripted model, for working on the reader without a key. Never in the extension. */
 const DEMO = location.protocol.startsWith("http") && new URLSearchParams(location.search).has("demo");
@@ -368,19 +355,17 @@ function App() {
         previous,
         onEvent: (e) => {
           if (e.type === "atoms") setPrep((p) => ({ ...p, stage: 2, atoms: { n: e.atoms, mechanical: e.mechanical } }));
-          if (e.type === "order-draft") setPrep((p) => ({ ...p, plan: { summary: e.summary, labels: e.labels } }));
-          if (e.type === "order-attempt" && e.errors.length) setPrep((p) => ({ ...p, note: `Fixing the order (round ${e.round + 2})`, plan: undefined }));
+          if (e.type === "order-draft") setPrep((p) => (p.planned === e.labels.length ? p : { ...p, planned: e.labels.length }));
+          if (e.type === "order-attempt" && e.errors.length) setPrep((p) => ({ ...p, note: `Fixing the order (round ${e.round + 2})`, planned: undefined }));
           if (e.type === "summarize") setPrep((p) => ({ ...p, note: `Summarizing ${e.total} batches of changes first (${e.done} done)` }));
           if (e.type === "plan") {
             steps = e.plan.steps.map(() => undefined);
             view = { pr, atoms: e.atoms, summary: e.plan.summary, plan: e.plan.steps, steps, mechanical: e.plan.mechanical, headSha: pr.headSha };
-            const labels = e.plan.steps.map((s) => s.label);
-            setPrep((p) => ({ ...p, stage: 3, note: undefined, steps: labels.length, plan: { summary: e.plan.summary, labels }, ...(labels.length ? { first: { label: labels[0] } } : {}) }));
+            setPrep((p) => ({ ...p, stage: 3, note: undefined, steps: e.plan.steps.length }));
           }
           if (e.type === "context") setPrep((p) => ({ ...p, stage: 4, context: { snippets: e.snippets, steps: e.steps, extraFiles: e.extraFiles } }));
           if (e.type === "draft") {
             drafts = { ...drafts, [e.index]: e.text };
-            if (!revealed && e.index === steps.findIndex((x) => !x)) setPrep((p) => (p.first ? { ...p, first: { ...p.first, label: view?.plan[e.index]?.label ?? p.first.label, draft: e.text } } : p));
             setLive((l) => (l?.writing ? { ...l, writing: { ...l.writing, drafts } } : l));
           }
           if (e.type === "step") {
@@ -594,8 +579,8 @@ function Preparing({ prep }: { prep: Prep }) {
     if (i === 1 && prep.atoms) return `${prep.atoms.n} change${prep.atoms.n === 1 ? "" : "s"}${prep.atoms.mechanical ? `, ${prep.atoms.mechanical} of them mechanical` : ""}`;
     if (i === 2 && prep.stage === 2) {
       if (!prep.model) return "In dependency order, since no model is set up";
-      if (!prep.plan?.summary && !prep.plan?.labels.length) return prep.note ?? "The model is reading the changes…";
-      return prep.note ?? null;
+      if (prep.note) return prep.note;
+      return prep.planned ? `${prep.planned} step${prep.planned === 1 ? "" : "s"} planned so far` : "The model is reading the changes…";
     }
     if (i === 2 && prep.stage > 2 && prep.steps != null) return `${prep.steps} step${prep.steps === 1 ? "" : "s"}`;
     if (i === 3 && prep.stage === 3) return "Looking through the repository…";
@@ -604,7 +589,7 @@ function Preparing({ prep }: { prep: Prep }) {
       if (!c.snippets) return "Nothing outside the changes was needed";
       return `${c.snippets} snippet${c.snippets === 1 ? "" : "s"} for ${c.steps} step${c.steps === 1 ? "" : "s"}${c.extraFiles ? `, from ${c.extraFiles} file${c.extraFiles === 1 ? "" : "s"} outside the PR` : ""}`;
     }
-    if (i === 4 && prep.stage === 4) return !prep.model ? "Template text, since no model is set up" : prep.first?.draft ? null : "The model is reading the first step…";
+    if (i === 4 && prep.stage === 4) return !prep.model ? "Template text, since no model is set up" : "Writing the first step…";
     if (i === 4 && prep.stage === 5) {
       const n = prep.steps ?? 0;
       const w = prep.written ?? 0;
@@ -635,19 +620,6 @@ function Preparing({ prep }: { prep: Prep }) {
               <div>
                 <span className="stage-name">{name}</span>
                 {d ? <span className="stage-detail">{d}</span> : null}
-                {i === 2 && prep.stage === 2 && prep.plan ? <PlanDraft plan={prep.plan} /> : null}
-                {i === 4 && prep.stage === 4 && prep.first?.draft ? (
-                  <div className="plan-draft first-draft">
-                    <p className="plan-summary first-label">
-                      <span className="n">1</span>
-                      <Inline text={closeTicks(prep.first.label)} />
-                    </p>
-                    <p className="plan-summary">
-                      <Inline text={closeTicks(prep.first.draft)} />
-                      <span className="caret" aria-hidden="true" />
-                    </p>
-                  </div>
-                ) : null}
               </div>
             </li>
           );
@@ -658,31 +630,6 @@ function Preparing({ prep }: { prep: Prep }) {
         {prep.model ? ` · ${prep.model}` : ""}
         {prep.model && costSoFar(prep.model, prep.usage) ? ` · ${costSoFar(prep.model, prep.usage)}` : ""}
       </p>
-    </div>
-  );
-}
-
-/** The summary and step labels as the model writes them. */
-function PlanDraft({ plan }: { plan: { summary: string; labels: string[] } }) {
-  return (
-    <div className="plan-draft">
-      {plan.summary ? (
-        <p className="plan-summary">
-          <Inline text={closeTicks(plan.summary)} />
-          {!plan.labels.length ? <span className="caret" aria-hidden="true" /> : null}
-        </p>
-      ) : null}
-      {plan.labels.length ? (
-        <ol className="plan-labels">
-          {plan.labels.map((l, i) => (
-            <li key={i}>
-              <span className="n">{i + 1}</span>
-              <Inline text={closeTicks(l)} />
-              {i === plan.labels.length - 1 ? <span className="caret" aria-hidden="true" /> : null}
-            </li>
-          ))}
-        </ol>
-      ) : null}
     </div>
   );
 }
