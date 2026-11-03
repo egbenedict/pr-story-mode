@@ -36,7 +36,7 @@ In Chrome, open `chrome://extensions`, turn on **Developer mode**, choose **Load
 - **Content script** (`src/content.ts`): detects PR pages, including GitHub's in-page navigation, and adds one button. It goes in the PR header's action area when that is on screen, otherwise it floats at the bottom right. Nothing else on GitHub's page is changed.
 - **Reader** (`src/reader/`): an extension page shown in a full-window overlay. It runs the whole pipeline in the browser: GitHub ingest, tree-sitter in WASM, ordering and explanation. The outline and code appear as soon as the order is settled, and explained steps stream in. The reader shows tokens and estimated cost while it writes, a per-step reviewed checkbox, raw diffs, citations that highlight lines, and a banner when the model failed or new commits have landed.
 - **Why an extension page and not the service worker**: Chrome stops idle service workers after about 30 seconds, and one model call can take longer. An extension page in an iframe also keeps GitHub's styles and content security policy out of the reader. The service worker only opens settings.
-- **Settings** (`src/options/`, `src/settings.ts`): stored in `chrome.storage.local`, never synced. A custom base URL (gateway or self-hosted server) asks Chrome for permission to reach that host.
+- **Settings** (`src/options/`, `src/settings.ts`): stored in `chrome.storage.local`, never synced. A custom base URL (gateway or self-hosted server) asks Chrome for permission to reach that host. Settings are re-read on every run, so a key or token saved while a reader is open applies on the next try. When GitHub's rate limit is hit or a repository isn't found, the reader explains why and links to settings.
 - **Cache** (`src/cache.ts`): finished stories in IndexedDB, keyed by repository and PR number, with the head commit they cover. Reopening a PR is free; if new commits landed, the old story shows with a regenerate banner. Stories where the model failed are not cached.
 
 To work on the reader without loading the extension, serve `packages/extension/dist` locally and open `reader.html?pr=<PR URL>`; settings then fall back to the page's `localStorage`.
@@ -57,7 +57,7 @@ Provider options: `--provider anthropic|openai|openai-compatible|none`, `--model
 ingest → parse (tree-sitter) → atomize → classify + symbol graph → [summarize (LLM)] → order (LLM) → validate & repair → context → explain (LLM)
 ```
 
-- **Ingest** (`github.ts`, `cli/src/local.ts`): the diff, the base and head versions of changed files, and for GitHub PRs up to three issues the description says it fixes or closes. Linked issues go into every prompt after the description.
+- **Ingest** (`github.ts`, `cli/src/local.ts`): the diff, the base and head versions of changed files, and for GitHub PRs up to three issues the description says it fixes or closes. Linked issues go into every prompt after the description. Without a token, GitHub's API allows 60 requests an hour, so file contents are read from `raw.githubusercontent.com` instead (falling back to the API if that fails). A story then uses about four API requests, whatever the PR's size. With a token, everything goes through the API.
 - **Atomize** (`packages/core/src/atomize.ts`): each changed line is mapped to its smallest enclosing syntactic unit. A hunk that spans two functions becomes two atoms, and several hunks inside one function merge into one atom. Comments and decorators attach to the code they precede.
 - **Classify** (`classify.ts`): formatting-only edits, pure renames, import reshuffles, lockfiles and generated files are tagged mechanical. A rename must be consistent across the PR and introduce a new name, so swapped arguments are never hidden as "mechanical". Code removed in one place and added verbatim elsewhere is tagged as moved.
 - **Graph** (`symbols.ts`, `graph.ts`): `A → B` when A defines a symbol that B references. Cycles are handled as strongly connected components.
@@ -92,7 +92,7 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ## Tests and benchmark
 
 ```bash
-npm test            # 47 tests: diff parsing, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings
+npm test            # 50 tests: diff parsing, GitHub ingest and rate-limit errors, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings
 npm run typecheck
 ```
 

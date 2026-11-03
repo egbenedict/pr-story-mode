@@ -1,4 +1,4 @@
-import { fetchPullHead, fetchPullRequest, parsePrUrl, READER_CSS, runPipeline, type LLMProvider, type PipelineEvent, type PipelineResult, type PRInput, type StoryStep, type Usage } from "@prstory/core";
+import { fetchPullHead, fetchPullRequest, GitHubError, parsePrUrl, READER_CSS, runPipeline, type LLMProvider, type PipelineEvent, type PipelineResult, type PRInput, type StoryStep, type Usage } from "@prstory/core";
 import { createProvider, estimateCost } from "@prstory/providers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -27,6 +27,8 @@ main { overflow: auto; height: calc(100vh - 41px); }
 .status h1 { font-size: 20px; margin: 0 0 8px; }
 .status .stage { color: var(--muted); }
 .status .error { color: var(--del-ink); white-space: pre-wrap; font: 13px/1.5 var(--mono); background: var(--del-bg); padding: 10px 12px; border-radius: 6px; }
+.status .detail { margin-top: 16px; font-size: 13px; color: var(--muted); }
+.status .detail summary { cursor: pointer; }
 .start { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 @media (max-width: 860px) { .layout, .rail, main { height: auto; overflow: visible; } }
 `;
@@ -34,7 +36,7 @@ main { overflow: auto; height: calc(100vh - 41px); }
 type Phase =
   | { kind: "loading"; stage: string }
   | { kind: "ask"; reason: string } // no model configured: offer settings or a model-free story
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; github?: Pick<GitHubError, "kind" | "resetAt">; hasToken?: boolean };
 
 type Live = { view: StoryView; writing: string | null; usage: Required<Usage>; model: string; provider: string; result?: PipelineResult; stale?: string; problem?: string };
 
@@ -43,6 +45,29 @@ function modelProblem(r: PipelineResult): string | null {
   const providerError = r.metrics.orderErrors.find((e) => e.startsWith("Provider error:"));
   if (providerError) return `The model couldn't be used, so this story shows dependency order and template text. ${providerError.replace(/^Provider error:\s*/, "")}`;
   if (r.metrics.steps > 0 && r.metrics.missingExplanations === r.metrics.steps) return "The model returned no usable explanations, so steps show template text.";
+  return null;
+}
+
+function errorPhase(err: unknown, settings: Settings | null): Phase {
+  const message = err instanceof Error ? err.message : String(err);
+  return err instanceof GitHubError ? { kind: "error", message, github: { kind: err.kind, resetAt: err.resetAt }, hasToken: !!settings?.githubToken } : { kind: "error", message };
+}
+
+/** A plain-language title and explanation for GitHub failures; null for everything else. */
+function githubHelp(p: Extract<Phase, { kind: "error" }>): { title: string; text: string } | null {
+  if (p.github?.kind === "rate-limit") {
+    const at = p.github.resetAt ? ` It resets at ${new Date(p.github.resetAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.` : "";
+    return p.hasToken
+      ? { title: "GitHub's hourly limit was reached", text: `Your GitHub token has used up its requests for this hour.${at}` }
+      : {
+          title: "GitHub's hourly limit was reached",
+          text: `Without a token, GitHub allows 60 requests an hour from your network, and other tools on your network may use them too.${at} A free GitHub token raises the limit to 5,000; read-only access to public repositories is enough.`,
+        };
+  }
+  if (p.github?.kind === "not-found")
+    return p.hasToken
+      ? { title: "GitHub can't find this pull request", text: "Your GitHub token may not have access to this repository. Check that the token includes it." }
+      : { title: "GitHub can't find this pull request", text: "If it's in a private repository, add a GitHub token with read access to it in settings." };
   return null;
 }
 
@@ -93,10 +118,13 @@ function App() {
   const settingsRef = useRef<Settings | null>(null);
   const running = useRef(false);
 
-  async function generate(withModel: boolean) {
+  /** `withModel` undefined: use the model when one is set up. Settings are re-read each time, since they may have changed in the settings tab. */
+  async function generate(withModel?: boolean) {
     if (!ref || running.current) return;
     running.current = true;
-    const settings = settingsRef.current ?? (await loadSettings());
+    const settings = await loadSettings();
+    settingsRef.current = settings;
+    withModel ??= missingModelReason(settings) === null;
     try {
       setLive(null);
       setPhase({ kind: "loading", stage: "Reading the pull request from GitHub…" });
@@ -143,7 +171,7 @@ function App() {
       if (!problem) await putStory({ key: storyKey(pr.repo ?? ref.repo, pr.number), headSha: pr.headSha, savedAt: Date.now(), pr, result });
     } catch (err) {
       setLive(null);
-      setPhase({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+      setPhase(errorPhase(err, settings));
     } finally {
       running.current = false;
     }
@@ -163,7 +191,7 @@ function App() {
         head = (await fetchPullHead(ref, { token: settings.githubToken || undefined })).headSha;
       } catch (err) {
         if (!cached) {
-          setPhase({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+          setPhase(errorPhase(err, settings));
           return;
         }
       }
@@ -184,7 +212,7 @@ function App() {
     <div className="topbar">
       <span className="brand">PR Story Mode</span>
       {live && !live.writing ? (
-        <button type="button" onClick={() => void generate(missingModelReason(settingsRef.current!) === null)}>
+        <button type="button" onClick={() => void generate()}>
           Regenerate
         </button>
       ) : null}
@@ -231,7 +259,7 @@ function App() {
     ) : live.stale ? (
       <div className="banner">
         <span>{live.stale}</span>
-        <button type="button" onClick={() => void generate(missingModelReason(settingsRef.current!) === null)}>
+        <button type="button" onClick={() => void generate()}>
           Regenerate
         </button>
       </div>
@@ -267,20 +295,46 @@ function App() {
             </div>
           </>
         ) : (
-          <>
-            <h1>Something went wrong</h1>
-            <p className="error">{phase.message}</p>
-            <div className="start">
-              <button type="button" onClick={() => void generate(missingModelReason(settingsRef.current ?? { provider: "none" } as Settings) === null)}>
-                Try again
-              </button>
-              <button type="button" onClick={openSettings}>
-                Settings
-              </button>
-            </div>
-          </>
+          <ErrorScreen phase={phase} retry={() => void generate()} />
         )}
       </div>
+    </>
+  );
+}
+
+function ErrorScreen({ phase, retry }: { phase: Extract<Phase, { kind: "error" }>; retry: () => void }) {
+  const help = githubHelp(phase);
+  if (!help)
+    return (
+      <>
+        <h1>Something went wrong</h1>
+        <p className="error">{phase.message}</p>
+        <div className="start">
+          <button type="button" onClick={retry}>
+            Try again
+          </button>
+          <button type="button" onClick={openSettings}>
+            Settings
+          </button>
+        </div>
+      </>
+    );
+  return (
+    <>
+      <h1>{help.title}</h1>
+      <p>{help.text}</p>
+      <div className="start">
+        <button type="button" className="primary" onClick={openSettings}>
+          {phase.hasToken ? "Open settings" : "Add a GitHub token"}
+        </button>
+        <button type="button" onClick={retry}>
+          Try again
+        </button>
+      </div>
+      <details className="detail">
+        <summary>Details</summary>
+        <p className="error">{phase.message}</p>
+      </details>
     </>
   );
 }

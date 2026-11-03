@@ -37,9 +37,31 @@ export type GitHubOptions = {
   apiBase?: string; // GitHub Enterprise Server: https://ghe.example.com/api/v3
   fetchImpl?: typeof fetch;
   concurrency?: number;
+  /**
+   * Where file contents come from without a token. GitHub's REST API allows 60 requests an hour
+   * without one, and a story needs two per changed file, so by default github.com files are read
+   * from raw.githubusercontent.com, which has its own, much higher limit.
+   */
+  rawBase?: string | null;
 };
 
-/** A GET against the REST API that throws a readable error, mentioning rate limits. */
+export const RAW_BASE = "https://raw.githubusercontent.com";
+
+/** A failed GitHub request. `kind` lets callers explain rate limits and missing repositories. */
+export class GitHubError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly kind: "rate-limit" | "not-found" | "other",
+    /** When the rate limit resets (ms since epoch), if GitHub said. */
+    readonly resetAt?: number,
+  ) {
+    super(message);
+    this.name = "GitHubError";
+  }
+}
+
+/** A GET against the REST API that throws a GitHubError, mentioning rate limits. */
 function githubGetter(ref: PRRef, opts: GitHubOptions) {
   const api = opts.apiBase ?? defaultApiBase(ref.host);
   const f = opts.fetchImpl ?? fetch;
@@ -51,9 +73,12 @@ function githubGetter(ref: PRRef, opts: GitHubOptions) {
   return async (path: string, accept = "application/vnd.github+json") => {
     const res = await f(`${api}${path}`, { headers: headers(accept) });
     if (!res.ok) {
-      const remaining = res.headers.get("x-ratelimit-remaining");
-      const hint = remaining === "0" ? " (GitHub rate limit reached; add a GitHub token)" : res.status === 404 ? " (private repository? add a GitHub token)" : "";
-      throw new Error(`GitHub ${res.status} for ${path}${hint}: ${(await res.text()).slice(0, 200)}`);
+      const body = (await res.text()).slice(0, 200);
+      const rateLimited = res.headers.get("x-ratelimit-remaining") === "0" || ((res.status === 403 || res.status === 429) && /rate limit/i.test(body));
+      const reset = Number(res.headers.get("x-ratelimit-reset"));
+      const kind = rateLimited ? "rate-limit" : res.status === 404 ? "not-found" : "other";
+      const hint = kind === "rate-limit" ? " (GitHub rate limit reached; add a GitHub token)" : kind === "not-found" ? " (private repository? add a GitHub token)" : "";
+      throw new GitHubError(`GitHub ${res.status} for ${path}${hint}: ${body}`, res.status, kind, reset > 0 ? reset * 1000 : undefined);
     }
     return res;
   };
@@ -89,8 +114,15 @@ export async function fetchPullRequest(ref: PRRef, opts: GitHubOptions = {}): Pr
 
   const files: PRFile[] = parseUnifiedDiff(diffText);
   const needsText = (p: string) => !!packForPath(p) && !isLockfile(p) && !isGeneratedPath(p);
+  const rawBase = opts.rawBase === undefined ? (!opts.token && !opts.apiBase && ref.host === "github.com" ? RAW_BASE : null) : opts.rawBase;
+  const f = opts.fetchImpl ?? fetch;
   const raw = async (path: string, sha: string) => {
     const enc = path.split("/").map(encodeURIComponent).join("/");
+    if (rawBase) {
+      // Falls back to the API when the raw host fails (blocked network, odd paths).
+      const res = await f(`${rawBase}/${ref.owner}/${ref.repo}/${sha}/${enc}`).catch(() => null);
+      if (res?.ok) return res.text();
+    }
     return (await get(`${repoPath}/contents/${enc}?ref=${sha}`, "application/vnd.github.raw")).text();
   };
 
