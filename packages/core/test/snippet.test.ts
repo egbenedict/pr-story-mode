@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseUnifiedDiff } from "../src/diff";
-import { atomSnippet, rowNumber, snippetText, walkthrough } from "../src/snippet";
+import { atomSnippet, expandChunk, fileRows, rowNumber, rowPositions, snippetText, walkthrough, type SnippetRow } from "../src/snippet";
 import type { ChangeAtom, PRFile, StoryStep } from "../src/types";
 import { changedLines } from "../src/diff";
 
@@ -116,5 +116,59 @@ describe("walkthrough", () => {
   it("puts everything after a beat with no cuts", () => {
     const w = walkthrough(step([null]), snippets);
     expect(w.beats[0].code[0].rows).toEqual(rows);
+  });
+});
+
+describe("expanding a chunk", () => {
+  // 30 lines; lines 15 and 25 change.
+  const head = Array.from({ length: 30 }, (_, i) => (i + 1 === 15 || i + 1 === 25 ? `X${i + 1}` : `l${i + 1}`)).join("\n") + "\n";
+  const base = Array.from({ length: 30 }, (_, i) => `l${i + 1}`).join("\n") + "\n";
+  const ctx = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => ` l${a + i}`).join("\n");
+  const diff = `diff --git a/t.c b/t.c\n--- a/t.c\n+++ b/t.c\n@@ -12,7 +12,7 @@\n${ctx(12, 14)}\n-l15\n+X15\n${ctx(16, 18)}\n@@ -22,7 +22,7 @@\n${ctx(22, 24)}\n-l25\n+X25\n${ctx(26, 28)}\n`;
+  const f: PRFile = { ...parseUnifiedDiff(diff)[0], baseText: base, headText: head };
+  const a: ChangeAtom = { id: "t", file: "t.c", language: "c", symbolPath: ["t"], kind: "modified", hunkLines: changedLines(f), defines: [], references: [], supportTier: 1 };
+  const rows = atomSnippet(f, a);
+  const all = fileRows(f);
+  const pos = rowPositions(all);
+  const gapAt = rows.findIndex((r) => r.type === "gap");
+  const nums = (rs: SnippetRow[]) => rs.map((r) => (r.type === "gap" ? "…" : r.type === "del" ? `-${r.oldLine}` : `${r.newLine}`));
+
+  it("lists every line of the file in diff order", () => {
+    expect(all).toHaveLength(32);
+    expect(all.every((r) => r.type !== "gap")).toBe(true);
+    expect(nums(all.slice(10, 13))).toEqual(["11", "12", "13"]);
+    expect(all[all.length - 1]).toMatchObject({ type: "context", text: "l30", oldLine: 30, newLine: 30 });
+  });
+
+  it("adds lines above, below and inside gaps, and says how many are left", () => {
+    expect(nums(rows)).toEqual(["12", "13", "14", "-15", "15", "16", "17", "18", "…", "22", "23", "24", "-25", "25", "26", "27", "28"]);
+    const closed = expandChunk(rows, all, pos, new Set(), { above: 0, below: 0, gaps: {} });
+    expect(closed).toMatchObject({ moreAbove: 11, moreBelow: 2 });
+    expect(closed.gaps.get(rows[gapAt])).toEqual({ gap: gapAt, hidden: 3 });
+
+    const open = expandChunk(rows, all, pos, new Set(), { above: 5, below: 10, gaps: { [gapAt]: [1, 0] } });
+    expect(nums(open.rows).slice(0, 6)).toEqual(["7", "8", "9", "10", "11", "12"]);
+    expect(nums(open.rows).slice(-3)).toEqual(["28", "29", "30"]);
+    expect(nums(open.rows).slice(12, 15)).toEqual(["18", "19", "…"]);
+    expect(open).toMatchObject({ moreAbove: 6, moreBelow: 0 });
+    expect(open.extra.size).toBe(5 + 2 + 1);
+
+    const gapGone = expandChunk(rows, all, pos, new Set(), { above: 0, below: 0, gaps: { [gapAt]: [2, 1] } });
+    expect(nums(gapGone.rows).slice(7, 11)).toEqual(["18", "19", "20", "21"]);
+    expect([...gapGone.gaps.values()]).toEqual([]);
+  });
+
+  it("stops at lines shown elsewhere in the step", () => {
+    const line10 = all.findIndex((r) => r.type === "context" && r.newLine === 10);
+    expect(expandChunk(rows, all, pos, new Set([line10]), { above: 0, below: 0, gaps: {} }).moreAbove).toBe(1);
+  });
+
+  it("can't expand between hunks without the file's text", () => {
+    const bare: PRFile = { ...f, baseText: undefined, headText: undefined };
+    const r = fileRows(bare);
+    expect(r.filter((x) => x.type === "gap")).toHaveLength(2); // before the first hunk and between the two
+    const e = expandChunk(rows, r, rowPositions(r), new Set(), { above: 0, below: 0, gaps: {} });
+    expect(e).toMatchObject({ moreAbove: 0, moreBelow: 0 });
+    expect(e.gaps.get(rows[gapAt])).toEqual({ gap: gapAt, hidden: 0 });
   });
 });

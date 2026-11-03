@@ -79,6 +79,11 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .diff tbody.fold-body.open { display: table-row-group; }
 .fold-btn { all: unset; cursor: pointer; display: block; width: 100%; padding: 2px 10px; font: 11.5px var(--sans); color: var(--muted); background: var(--ctx-bg); }
 .fold-btn:hover { color: var(--accent); }
+.diff tbody.expand td { background: var(--ctx-bg); padding: 1px 10px; }
+.expand-btn { all: unset; cursor: pointer; padding: 1px 4px; border-radius: 4px; font: 11.5px var(--sans); color: var(--muted); }
+.expand-btn:hover, .expand-btn:focus-visible { color: var(--accent); }
+.expand-gap { display: inline-flex; gap: 16px; align-items: center; }
+.diff tr.other { opacity: 0.55; }
 .diff tr.hl td { box-shadow: inset 3px 0 0 var(--accent); }
 .diff tr.hl td.code { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .empty { margin: 0; padding: 10px 12px; color: var(--muted); font-size: 13px; }

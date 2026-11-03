@@ -2,14 +2,18 @@ import {
   atomLabel,
   atomSnippet,
   contextCaption,
+  expandChunk,
+  fileRows,
   lineCounts,
   reindentRuns,
   rowNumber,
+  rowPositions,
   rowTarget,
   walkthrough,
   type ChangeAtom,
   type Citation,
   type ContextSnippet,
+  type Expansion,
   type PRInput,
   type SnippetRow,
   type StoryStep,
@@ -36,13 +40,19 @@ type Ctx = {
   byId: Map<string, ChangeAtom>;
   snippets: Map<string, SnippetRow[]>;
   files: Map<string, PRInput["files"][number]>;
+  /** Every line of a changed file in diff order, for expanding chunks (built on first use). */
+  fileView: (path: string) => FileView | null;
   link: (file: string, side: "LEFT" | "RIGHT", line: number) => string | null;
   hl: Hl;
   setHl: (h: Hl) => void;
 };
 const StoryCtx = createContext<Ctx>(null as unknown as Ctx);
 
+type FileView = { all: SnippetRow[]; pos: ReturnType<typeof rowPositions> };
+
 const FOLD_MIN = 4; // re-indented runs at least this long collapse into one row
+const EXPAND_STEP = 10; // lines added per click of an expand button
+const EXPAND_ALL_MAX = 15; // a stretch this short opens in one click
 const CONTEXT_OPEN_MAX = 3; // longer context snippets start collapsed; a citation opens them
 
 /** `code` spans in model text. */
@@ -111,12 +121,12 @@ function inRange(r: SnippetRow, from: number, to: number): boolean {
   return (n != null && n >= from && n <= to) || (o != null && o >= from && o <= to);
 }
 
-function Row({ r, hl, path }: { r: SnippetRow; hl: boolean; path?: string }) {
+function Row({ r, hl, path, cls, gap }: { r: SnippetRow; hl: boolean; path?: string; cls?: string; gap?: ReactNode }) {
   const cm = useComments();
   if (r.type === "gap")
     return (
       <tr className="gap">
-        <td colSpan={3}>⋯</td>
+        <td colSpan={3}>{gap ?? "⋯"}</td>
       </tr>
     );
   const sign = r.type === "add" ? "+" : r.type === "del" ? "−" : r.type === "reindent" ? "~" : "";
@@ -128,7 +138,7 @@ function Row({ r, hl, path }: { r: SnippetRow; hl: boolean; path?: string }) {
   const sel = !!(t && path && cm?.selected(path, t.side, t.line));
   return (
     <>
-      <tr className={`${r.type}${hl ? " hl" : ""}${sel ? " sel" : ""}`}>
+      <tr className={`${r.type}${cls ? ` ${cls}` : ""}${hl ? " hl" : ""}${sel ? " sel" : ""}`} title={cls === "other" ? "Changed in another step" : undefined}>
         <td className="ln">
           {t?.side === "LEFT" ? button : null}
           {old}
@@ -158,7 +168,7 @@ function useRowHasComments(path: string | undefined) {
   };
 }
 
-function Fold({ rows, n, isHl, path }: { rows: SnippetRow[]; n: number; isHl: (r: SnippetRow) => boolean; path?: string }) {
+function Fold({ rows, n, isHl, path, clsOf }: { rows: SnippetRow[]; n: number; isHl: (r: SnippetRow) => boolean; path?: string; clsOf: (r: SnippetRow) => string | undefined }) {
   const hasComments = useRowHasComments(path);
   const hit = rows.some(isHl) || rows.some(hasComments);
   const [open, setOpen] = useState(false);
@@ -178,17 +188,27 @@ function Fold({ rows, n, isHl, path }: { rows: SnippetRow[]; n: number; isHl: (r
       </tbody>
       <tbody className={`fold-body${open ? " open" : ""}`}>
         {rows.map((r, i) => (
-          <Row key={i} r={r} hl={isHl(r)} path={path} />
+          <Row key={i} r={r} hl={isHl(r)} path={path} cls={clsOf(r)} />
         ))}
       </tbody>
     </>
   );
 }
 
-function DiffTable({ atomId, rows, cls, step }: { atomId: string; rows: SnippetRow[]; cls: string; step: number }) {
+type ExpandProps = {
+  /** Rows added by expanding; changed ones belong to other atoms and are dimmed. */
+  extra?: Set<SnippetRow>;
+  top?: ReactNode;
+  bottom?: ReactNode;
+  /** Controls drawn inside a gap row that can be opened. */
+  gapControl?: (r: SnippetRow) => ReactNode | undefined;
+};
+
+function DiffTable({ atomId, rows, cls, step, extra, top, bottom, gapControl }: { atomId: string; rows: SnippetRow[]; cls: string; step: number } & ExpandProps) {
   const { hl, byId } = useContext(StoryCtx);
   const path = byId.get(atomId)?.file;
   const isHl = (r: SnippetRow) => !!hl && hl.step === step && hl.atomId === atomId && cls === "story" && inRange(r, hl.from, hl.to);
+  const clsOf = (r: SnippetRow) => (extra?.has(r) ? (r.type === "context" ? "extra" : "other") : undefined);
   const runs = useMemo(() => new Map(reindentRuns(rows, FOLD_MIN).map(([a, b, c]) => [a, [b, c] as const])), [rows]);
   const parts: ReactNode[] = [];
   let plain: SnippetRow[] = [];
@@ -197,7 +217,7 @@ function DiffTable({ atomId, rows, cls, step }: { atomId: string; rows: SnippetR
       parts.push(
         <tbody key={key}>
           {plain.map((r, i) => (
-            <Row key={i} r={r} hl={isHl(r)} path={path} />
+            <Row key={i} r={r} hl={isHl(r)} path={path} cls={clsOf(r)} gap={gapControl?.(r)} />
           ))}
         </tbody>,
       );
@@ -208,16 +228,79 @@ function DiffTable({ atomId, rows, cls, step }: { atomId: string; rows: SnippetR
     if (run) {
       const [end, n] = run;
       flush(`p${i}`);
-      parts.push(<Fold key={`f${i}`} rows={rows.slice(i, end + 1)} n={n} isHl={isHl} path={path} />);
+      parts.push(<Fold key={`f${i}`} rows={rows.slice(i, end + 1)} n={n} isHl={isHl} path={path} clsOf={clsOf} />);
       i = end;
     } else plain.push(rows[i]);
   }
   flush("end");
   return (
     <table className={`diff ${cls}`} data-atom={atomId}>
+      {top}
       {parts}
+      {bottom}
     </table>
   );
+}
+
+function ExpandBar({ dir, n, onMore }: { dir: "up" | "down"; n: number; onMore: (k: number) => void }) {
+  const k = n <= EXPAND_ALL_MAX ? n : EXPAND_STEP;
+  const where = dir === "up" ? "above" : "below";
+  return (
+    <tbody className={`expand ${dir}`}>
+      <tr>
+        <td colSpan={3}>
+          <button type="button" className="expand-btn" onClick={() => onMore(k)} title={`${n} unchanged line${n === 1 ? "" : "s"} ${where}`}>
+            {dir === "up" ? "↑" : "↓"} Show {k === n ? (n === 1 ? "1 line" : `${n} lines`) : `${k} more lines`} {where}
+          </button>
+        </td>
+      </tr>
+    </tbody>
+  );
+}
+
+/**
+ * GitHub-style expanding for a chunk: buttons above and below it, and in its gaps, that show the
+ * file's lines around the change. Lines already shown elsewhere in the step (`taken`) are never added.
+ */
+function useExpand(atom: ChangeAtom | undefined, rows: SnippetRow[], taken: Set<number> | undefined, enabled = true): { rows: SnippetRow[] } & ExpandProps {
+  const { fileView } = useContext(StoryCtx);
+  const [e, setE] = useState<Expansion>({ above: 0, below: 0, gaps: {} });
+  const fv = atom && enabled ? fileView(atom.file) : null;
+  const x = useMemo(() => (fv ? expandChunk(rows, fv.all, fv.pos, taken ?? new Set(), e) : null), [fv, rows, taken, e]);
+  if (!x) return { rows };
+  const openGap = (gap: number, t: number, b: number) =>
+    setE((p) => {
+      const [t0, b0] = p.gaps[gap] ?? [0, 0];
+      return { ...p, gaps: { ...p.gaps, [gap]: [t0 + t, b0 + b] } };
+    });
+  return {
+    rows: x.rows,
+    extra: x.extra,
+    top: x.moreAbove ? <ExpandBar dir="up" n={x.moreAbove} onMore={(k) => setE((p) => ({ ...p, above: p.above + k }))} /> : null,
+    bottom: x.moreBelow ? <ExpandBar dir="down" n={x.moreBelow} onMore={(k) => setE((p) => ({ ...p, below: p.below + k }))} /> : null,
+    gapControl: (r) => {
+      const g = x.gaps.get(r);
+      if (!g?.hidden) return undefined;
+      const lines = `${g.hidden} hidden line${g.hidden === 1 ? "" : "s"}`;
+      if (g.hidden <= EXPAND_ALL_MAX)
+        return (
+          <button type="button" className="expand-btn" onClick={() => openGap(g.gap, g.hidden, 0)}>
+            ⋯ Show {lines}
+          </button>
+        );
+      return (
+        <span className="expand-gap">
+          <button type="button" className="expand-btn" onClick={() => openGap(g.gap, EXPAND_STEP, 0)} title="Show more lines below the code above">
+            ↓ {EXPAND_STEP} more
+          </button>
+          <span>⋯ {lines}</span>
+          <button type="button" className="expand-btn" onClick={() => openGap(g.gap, 0, EXPAND_STEP)} title="Show more lines above the code below">
+            ↑ {EXPAND_STEP} more
+          </button>
+        </span>
+      );
+    },
+  };
 }
 
 /** The atom's hunks exactly as GitHub shows them, for the raw-diff toggle. */
@@ -272,6 +355,7 @@ function AtomBlock({ atom }: { atom: ChangeAtom }) {
   const { snippets, files } = useContext(StoryCtx);
   const [raw, setRaw] = useState(false);
   const rows = snippets.get(atom.id) ?? [];
+  const ex = useExpand(atom, rows, undefined, !raw);
   const toggle = rows.length ? (
     <button className="raw-toggle" type="button" aria-pressed={raw} onClick={() => setRaw(!raw)}>
       Raw diff
@@ -280,19 +364,28 @@ function AtomBlock({ atom }: { atom: ChangeAtom }) {
   return (
     <div className="atom" id={`atom-${atom.id}`}>
       <AtomHead atom={atom} continued={false} extra={toggle} />
-      {rows.length ? <DiffTable atomId={atom.id} rows={raw ? rawRows(atom, files.get(atom.file)) : rows} cls={raw ? "raw-shown" : "story"} step={-1} /> : <EmptyNote atom={atom} />}
+      {rows.length ? (
+        raw ? (
+          <DiffTable atomId={atom.id} rows={rawRows(atom, files.get(atom.file))} cls="raw-shown" step={-1} />
+        ) : (
+          <DiffTable atomId={atom.id} cls="story" step={-1} {...ex} />
+        )
+      ) : (
+        <EmptyNote atom={atom} />
+      )}
     </div>
   );
 }
 
-function ChunkBlock({ c, step }: { c: WalkChunk; step: number }) {
+function ChunkBlock({ c, step, taken }: { c: WalkChunk; step: number; taken?: Set<number> }) {
   const { byId } = useContext(StoryCtx);
   const atom = byId.get(c.atomId);
+  const ex = useExpand(atom, c.rows, taken);
   if (!atom) return null;
   return (
     <div className="atom chunk" id={c.first ? `atom-${atom.id}` : undefined}>
       <AtomHead atom={atom} continued={!c.first} />
-      <DiffTable atomId={atom.id} rows={c.rows} cls="story" step={step} />
+      <DiffTable atomId={atom.id} cls="story" step={step} {...ex} />
     </div>
   );
 }
@@ -374,10 +467,25 @@ function ContextBlock({ c, step }: { c: ContextSnippet; step: number }) {
 }
 
 function Step({ i, step, done }: { i: number; step: StoryStep; done: boolean }) {
-  const { byId, snippets, files } = useContext(StoryCtx);
+  const { byId, snippets, files, fileView } = useContext(StoryCtx);
   const [raw, setRaw] = useState(false);
   const stepAtoms = step.atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
   const { beats } = useMemo(() => walkthrough(step, snippets), [step, snippets]);
+  // Per file, the lines this step's chunks already show, so expanding one chunk stops at the next.
+  const taken = useMemo(() => {
+    const m = new Map<string, Set<number>>();
+    for (const a of stepAtoms) {
+      const fv = fileView(a.file);
+      if (!fv) continue;
+      const set = m.get(a.file) ?? new Set<number>();
+      for (const r of snippets.get(a.id) ?? []) {
+        const p = fv.pos(r);
+        if (p) set.add(p[0]).add(p[1]);
+      }
+      m.set(a.file, set);
+    }
+    return m;
+  }, [step, snippets, fileView, byId]);
   const withCode = stepAtoms.filter((a) => (snippets.get(a.id) ?? []).length);
   return (
     <section className={`step${done ? " done" : ""}${raw ? " show-raw" : ""}`} id={`step-${i + 1}`} data-step={i + 1}>
@@ -409,7 +517,7 @@ function Step({ i, step, done }: { i: number; step: StoryStep; done: boolean }) 
                 </div>
               ) : null}
               {b.code.map((c, j) => (
-                <ChunkBlock key={j} c={c} step={i} />
+                <ChunkBlock key={j} c={c} step={i} taken={taken.get(byId.get(c.atomId)?.file ?? "")} />
               ))}
             </div>
           ))}
@@ -484,6 +592,17 @@ export function StoryReader({ view, writing, footer, banner, headerExtra }: { vi
   const byId = useMemo(() => new Map(atoms.map((a) => [a.id, a])), [atoms]);
   const files = useMemo(() => new Map(pr.files.map((f) => [f.path, f])), [pr]);
   const snippets = useMemo(() => new Map(atoms.map((a) => [a.id, atomSnippet(files.get(a.file), a)])), [atoms, files]);
+  const fileView = useMemo(() => {
+    const cache = new Map<string, FileView | null>();
+    return (path: string) => {
+      if (!cache.has(path)) {
+        const f = files.get(path);
+        const all = f && !f.binary ? fileRows(f) : null;
+        cache.set(path, all ? { all, pos: rowPositions(all) } : null);
+      }
+      return cache.get(path)!;
+    };
+  }, [files]);
   const hashes = usePathHashes(pr.files.map((f) => f.path));
   const link = (file: string, side: "LEFT" | "RIGHT", line: number) => {
     const h = hashes.get(file);
@@ -523,7 +642,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra }: { vi
   const changedLines = atoms.reduce((n, a) => n + a.hunkLines.length, 0);
 
   return (
-    <StoryCtx.Provider value={{ byId, snippets, files, link, hl, setHl }}>
+    <StoryCtx.Provider value={{ byId, snippets, files, fileView, link, hl, setHl }}>
       <div className="layout">
         <nav className="rail" aria-label="Story outline">
           <h2>Outline</h2>

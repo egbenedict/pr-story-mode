@@ -279,6 +279,118 @@ function keepReplacement(rows: SnippetRow[], idx: number, line: number): number 
   return k;
 }
 
+// ---------- expanding a snippet with the lines around it, as GitHub's expand arrows do ----------
+
+/**
+ * Every line of a file as rows in diff order: hunk lines as they are, and the unchanged lines between
+ * and around hunks from the file's text. A stretch whose text is missing becomes a gap row.
+ */
+export function fileRows(file: PRFile): SnippetRow[] {
+  const useHead = file.headText != null;
+  const text = file.headText ?? file.baseText;
+  const lines = text == null ? null : text.replace(/\n$/, "").split("\n");
+  const rows: SnippetRow[] = [];
+  let oldN = 1;
+  let newN = 1;
+  // Unchanged lines up to (not including) the given line numbers; Infinity runs to the end of the text.
+  const fill = (untilOld: number, untilNew: number) => {
+    if (!lines) {
+      if (newN < untilNew && untilNew !== Infinity) rows.push({ type: "gap" });
+      return;
+    }
+    while (oldN < untilOld && newN < untilNew) {
+      const t = lines[(useHead ? newN : oldN) - 1];
+      if (t === undefined) return;
+      rows.push({ type: "context", text: t, oldLine: oldN++, newLine: newN++ });
+    }
+  };
+  for (const h of file.hunks) {
+    // A side with no lines in the hunk gives the line before it as its start.
+    const o = h.oldLines ? h.oldStart : h.oldStart + 1;
+    const n = h.newLines ? h.newStart : h.newStart + 1;
+    fill(o, n);
+    for (const l of h.lines) rows.push({ ...l });
+    oldN = o + h.oldLines;
+    newN = n + h.newLines;
+  }
+  fill(Infinity, Infinity);
+  return rows;
+}
+
+/** Where a snippet row sits in `fileRows`, as [first, last] index (a reindent row stands for two lines). */
+export function rowPositions(all: SnippetRow[]): (r: SnippetRow) => [number, number] | null {
+  const byOld = new Map<number, number>();
+  const byNew = new Map<number, number>();
+  all.forEach((r, i) => {
+    if (r.type === "gap") return;
+    if (r.type !== "add" && r.oldLine != null) byOld.set(r.oldLine, i);
+    if (r.type !== "del" && r.newLine != null) byNew.set(r.newLine, i);
+  });
+  return (r) => {
+    if (r.type === "gap") return null;
+    const a = r.type === "add" ? undefined : r.oldLine != null ? byOld.get(r.oldLine) : undefined;
+    const b = r.type === "del" ? undefined : r.newLine != null ? byNew.get(r.newLine) : undefined;
+    if (r.type === "del") return a == null ? null : [a, a];
+    if (r.type === "reindent") return a == null || b == null ? (a ?? b) == null ? null : [(a ?? b)!, (a ?? b)!] : [Math.min(a, b), Math.max(a, b)];
+    return b == null ? null : [b, b];
+  };
+}
+
+/** How far a chunk is opened: extra lines above and below, and per gap row (by index) lines shown from its top and bottom. */
+export type Expansion = { above: number; below: number; gaps: Record<number, [number, number]> };
+
+export type ExpandedChunk = {
+  rows: SnippetRow[];
+  /** Rows added by expanding (not part of the atom's snippet). */
+  extra: Set<SnippetRow>;
+  /** Lines still available above and below the chunk. */
+  moreAbove: number;
+  moreBelow: number;
+  /** For each gap row still shown: the chunk gap it belongs to and how many lines it hides. */
+  gaps: Map<SnippetRow, { gap: number; hidden: number }>;
+};
+
+/**
+ * A chunk's rows opened by `e`, using the file's rows. Lines at positions in `taken` (shown elsewhere
+ * in the step) are never added above or below, so nothing appears twice.
+ */
+export function expandChunk(rows: SnippetRow[], all: SnippetRow[], pos: (r: SnippetRow) => [number, number] | null, taken: Set<number>, e: Expansion): ExpandedChunk {
+  const extra = new Set<SnippetRow>();
+  const gaps = new Map<SnippetRow, { gap: number; hidden: number }>();
+  const spans = rows.map(pos);
+  const firstPos = spans.find((x) => x)?.[0];
+  const lastPos = [...spans].reverse().find((x) => x)?.[1];
+  const usable = (i: number) => all[i] && all[i].type !== "gap" && !taken.has(i);
+
+  const up: SnippetRow[] = [];
+  if (firstPos != null) for (let i = firstPos - 1; i >= 0 && usable(i); i--) up.unshift(all[i]);
+  const down: SnippetRow[] = [];
+  if (lastPos != null) for (let i = lastPos + 1; i < all.length && usable(i); i++) down.push(all[i]);
+
+  const out: SnippetRow[] = [];
+  const shownUp = up.slice(Math.max(0, up.length - e.above));
+  for (const r of shownUp) (extra.add(r), out.push(r));
+  rows.forEach((r, k) => {
+    if (r.type !== "gap") return void out.push(r);
+    const before = spans.slice(0, k).reverse().find((x) => x)?.[1];
+    const after = spans.slice(k + 1).find((x) => x)?.[0];
+    const between: SnippetRow[] = [];
+    if (before != null && after != null) for (let i = before + 1; i < after; i++) if (all[i].type !== "gap") between.push(all[i]);
+    const [t, b] = e.gaps[k] ?? [0, 0];
+    if (!between.length) return void (out.push(r), gaps.set(r, { gap: k, hidden: 0 }));
+    for (const x of between.slice(0, t)) (extra.add(x), out.push(x));
+    const hidden = Math.max(0, between.length - t - b);
+    if (hidden) {
+      out.push(r);
+      gaps.set(r, { gap: k, hidden });
+    }
+    if (t < between.length) for (const x of between.slice(Math.max(t, between.length - b))) (extra.add(x), out.push(x));
+  });
+  const shownDown = down.slice(0, e.below);
+  for (const r of shownDown) (extra.add(r), out.push(r));
+  return { rows: out, extra, moreAbove: up.length - shownUp.length, moreBelow: down.length - shownDown.length, gaps };
+}
+
 export function atomLabel(atom: ChangeAtom): string {
   const sym = atom.symbolPath.filter((s) => !s.startsWith("<")).join(".");
   if (atom.symbolPath.includes("<imports>")) return `${atom.file} imports`;
