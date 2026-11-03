@@ -594,7 +594,63 @@ function useReviewed(key: string): [Record<number, boolean>, (step: number, on: 
 }
 
 /** Summary, the continuous scroll of steps, mechanical changes, and the outline rail. */
-export function StoryReader({ view, writing, footer, banner, headerExtra }: { view: StoryView; writing: string | null; footer: ReactNode; banner?: ReactNode; headerExtra?: ReactNode }) {
+/**
+ * A step that isn't written yet. The one being written shows its code and its words as they stream
+ * in; the rest wait as a placeholder.
+ */
+function PendingStep({ i, label, atomIds, active, draft }: { i: number; label: string; atomIds: string[]; active: boolean; draft?: string }) {
+  const { byId, snippets } = useContext(StoryCtx);
+  const atoms = atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
+  const lines = atoms.reduce((n, a) => n + a.hunkLines.length, 0);
+  return (
+    <section className={`step pending-step${active ? " active" : ""}`} id={`step-${i + 1}`} data-step={i + 1} aria-busy="true">
+      <div className="step-marker" aria-hidden="true">
+        {i + 1}
+      </div>
+      <div className="step-body">
+        <p className="pending-label">
+          <Inline text={label} />
+          <span className="pending-meta">
+            {active ? "Writing now" : "Up next"} · {lines} changed line{lines === 1 ? "" : "s"} in {[...new Set(atoms.map((a) => a.file.split("/").pop()))].join(", ")}
+          </span>
+        </p>
+        {active ? (
+          <>
+            <div className="draft" aria-live="polite">
+              {draft ? (
+                <Blocks text={draft.split("`").length % 2 === 0 ? `${draft}\`` : draft} tail={<span className="caret" aria-hidden="true" />} />
+              ) : (
+                <div className="skeleton" aria-label="Reading the code">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              )}
+            </div>
+            {atoms
+              .filter((a) => (snippets.get(a.id) ?? []).length)
+              .map((a) => (
+                <div className="atom chunk draft-code" key={a.id}>
+                  <AtomHead atom={a} continued={false} />
+                  <DiffTable atomId={a.id} rows={snippets.get(a.id)!} cls="story" step={i} />
+                </div>
+              ))}
+          </>
+        ) : (
+          <div className="skeleton quiet" aria-hidden="true">
+            <span />
+            <span />
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** While a story is being written: the text so far of steps still streaming, by step index. */
+export type Writing = { drafts: Record<number, string> };
+
+export function StoryReader({ view, writing, footer, banner, headerExtra }: { view: StoryView; writing: Writing | null; footer: ReactNode; banner?: ReactNode; headerExtra?: ReactNode }) {
   const { pr, atoms } = view;
   const byId = useMemo(() => new Map(atoms.map((a) => [a.id, a])), [atoms]);
   const files = useMemo(() => new Map(pr.files.map((f) => [f.path, f])), [pr]);
@@ -620,9 +676,10 @@ export function StoryReader({ view, writing, footer, banner, headerExtra }: { vi
   const [current, setCurrent] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
 
-  // The first unwritten step ends the visible scroll; later steps stay in the outline only.
+  // The step being written: the first with a draft, else the first not written yet.
   const firstMissing = view.steps.findIndex((s) => !s);
-  const shown = firstMissing === -1 ? view.plan.length : firstMissing;
+  const drafted = writing ? Object.keys(writing.drafts).map(Number).filter((i) => !view.steps[i]) : [];
+  const active = writing ? (drafted.length ? Math.min(...drafted) : firstMissing) : -1;
 
   useEffect(() => {
     if (!hl) return;
@@ -640,7 +697,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra }: { vi
     );
     document.querySelectorAll(".step").forEach((s) => io.observe(s));
     return () => io.disconnect();
-  }, [shown]);
+  }, [view.plan.length]);
 
   const mechAtoms = view.mechanical.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
   const mechLines = mechAtoms.reduce((n, a) => n + a.hunkLines.length, 0);
@@ -661,11 +718,16 @@ export function StoryReader({ view, writing, footer, banner, headerExtra }: { vi
           </div>
           <ol>
             {view.plan.map((s, i) => {
-              const ready = i < shown;
+              const ready = !!view.steps[i];
+              const state = ready ? "" : i === active ? " writing" : " pending";
               return (
-                <li key={i} className={`${done[i + 1] ? "done" : ""}${ready ? "" : " pending"}`}>
-                  <input type="checkbox" checked={!!done[i + 1]} disabled={!ready} onChange={(e) => setDone(i + 1, e.target.checked)} aria-label={`Mark step ${i + 1} reviewed`} />
-                  <a href={ready ? `#step-${i + 1}` : undefined} className={i === current ? "current" : ""}>
+                <li key={i} className={`${done[i + 1] ? "done" : ""}${state}`}>
+                  {ready ? (
+                    <input type="checkbox" checked={!!done[i + 1]} onChange={(e) => setDone(i + 1, e.target.checked)} aria-label={`Mark step ${i + 1} reviewed`} />
+                  ) : (
+                    <span className="rail-state" aria-label={i === active ? "Being written" : "Waiting to be written"} />
+                  )}
+                  <a href={`#step-${i + 1}`} className={i === current ? "current" : ""}>
                     <span className="n">{i + 1}</span>
                     <span>
                       <Inline text={s.label} />
@@ -676,7 +738,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra }: { vi
             })}
             {mechAtoms.length ? (
               <li>
-                <span style={{ width: 13 }} />
+                <span className="rail-spacer" />
                 <a href="#mechanical">
                   <span className="n">·</span>Mechanical changes
                 </a>
@@ -715,8 +777,10 @@ export function StoryReader({ view, writing, footer, banner, headerExtra }: { vi
               <Blocks text={view.summary} />
             </div>
           </header>
-          {view.steps.slice(0, shown).map((s, i) => (s ? <Step key={i} i={i} step={s} done={!!done[i + 1]} /> : null))}
-          {writing ? <p className="writing">{writing}</p> : null}
+          {view.plan.map((p, i) => {
+            const s = view.steps[i];
+            return s ? <Step key={i} i={i} step={s} done={!!done[i + 1]} /> : <PendingStep key={i} i={i} label={p.label} atomIds={p.atomIds} active={i === active} draft={writing?.drafts[i]} />;
+          })}
           {!writing && mechAtoms.length ? (
             <details className="mechanical" id="mechanical">
               <summary>

@@ -243,7 +243,7 @@ ${READER_CSS}
   <h2>Outline</h2>
   <div class="progress"><div></div></div>
   <div class="progress-text"></div>
-  <ol>${outline}${mechAtoms.length ? `<li><span style="width:13px"></span><a href="#mechanical"><span class="n">·</span>Mechanical changes</a></li>` : ""}</ol>
+  <ol>${outline}${mechAtoms.length ? `<li><span class="rail-spacer"></span><a href="#mechanical"><span class="n">·</span>Mechanical changes</a></li>` : ""}</ol>
 </nav>
 <main>
 <header>

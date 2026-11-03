@@ -2,6 +2,7 @@
 // a time or collected into a review, all through GitHub's normal review API. Teammates without the
 // extension see ordinary review comments.
 
+import { Icon } from "./icons";
 import {
   atomSnippet,
   commentableLines,
@@ -64,7 +65,7 @@ export const COMMENTS_CSS = `
 .cm-note ul { margin: 6px 0 0; padding-left: 18px; }
 .cm-note li { margin: 2px 0; }
 .review-wrap { position: relative; }
-.topbar .review-btn.has { background: var(--accent); border-color: var(--accent); color: #fff; }
+
 .review-panel { position: absolute; right: 0; top: calc(100% + 8px); width: min(440px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 32px rgba(0,0,0,.2); padding: 12px; z-index: 20; font-size: 13.5px; }
 .review-panel h3 { margin: 0 0 6px; font-size: 14px; }
 .review-panel textarea { display: block; width: 100%; min-height: 90px; font: 13.5px/1.5 var(--sans); padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); resize: vertical; }
@@ -518,8 +519,17 @@ export function ReviewButton() {
   const needsBody = event === "REQUEST_CHANGES" || (event === "COMMENT" && n === 0);
   return (
     <span className="review-wrap">
-      <button type="button" className={`review-btn${n ? " has" : ""}`} aria-expanded={open} onClick={() => (setOpen(!open), setDoneUrl(null))}>
-        {n ? `Finish review (${n})` : "Review"}
+      <button
+        type="button"
+        className={`tb${n ? " primary" : ""}`}
+        aria-expanded={open}
+        aria-label={n ? `Finish review, ${n} pending comment${n === 1 ? "" : "s"}` : "Review"}
+        title={n ? "Submit your pending comments as one review" : "Approve, request changes or leave a review comment"}
+        onClick={() => (setOpen(!open), setDoneUrl(null))}
+      >
+        <Icon name="review" />
+        <span className="tb-label">{n ? "Finish review" : "Review"}</span>
+        {n ? <span className="tb-badge">{n}</span> : null}
       </button>
       {open ? (
         <div className="review-panel" role="dialog" aria-label="Finish your review">

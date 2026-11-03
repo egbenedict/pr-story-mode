@@ -21,14 +21,25 @@ code { font: 0.9em var(--mono); background: var(--ctx-bg); padding: 0.05em 0.3em
 .progress { height: 4px; background: var(--line); border-radius: 2px; margin: 0 0 6px; overflow: hidden; }
 .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
 .progress-text { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
-.rail ol { list-style: none; padding: 0; margin: 0; }
-.rail li { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; font-size: 13px; line-height: 1.4; }
-.rail li input { margin-top: 2px; accent-color: var(--accent); }
-.rail li a { color: var(--ink); text-decoration: none; display: flex; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
-.rail li a code { font-size: 0.85em; padding: 0 0.2em; }
-.rail li a .n { color: var(--muted); min-width: 1.6em; font-variant-numeric: tabular-nums; }
+/* Outline rows: a 16px box (checkbox or status) centred on the first 20px line, then the number in
+   its own column so wrapped labels hang under the label, not under the number. */
+.rail ol { list-style: none; padding: 0; margin: 0 -8px; display: grid; gap: 1px; }
+.rail li { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 8px; align-items: start; padding: 4px 8px; border-radius: 7px; font-size: 13px; line-height: 20px; }
+.rail li:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.rail li:has(a.current) { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.rail li > input, .rail li > .rail-state, .rail li > .rail-spacer { width: 16px; height: 16px; margin: 2px 0 0; box-sizing: border-box; }
+.rail li > input { appearance: none; -webkit-appearance: none; border: 1.5px solid color-mix(in srgb, var(--muted) 55%, transparent); border-radius: 4px; background: var(--panel); cursor: pointer; transition: background-color .15s, border-color .15s; }
+.rail li > input:hover { border-color: var(--accent); }
+.rail li > input:checked { background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-6.5' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 11px no-repeat; border-color: var(--accent); }
+.rail li > input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rail li a { color: var(--ink); text-decoration: none; display: grid; grid-template-columns: 22px minmax(0, 1fr); min-width: 0; }
+.rail li a .n { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; padding-right: 8px; }
+.rail li a > span:last-child { overflow-wrap: anywhere; }
+.rail li a code { font-size: 0.86em; line-height: 1; padding: 1px 4px; border-radius: 4px; }
 .rail li a.current { color: var(--accent); font-weight: 600; }
-.rail li.done a { color: var(--muted); text-decoration: line-through; }
+.rail li a.current .n { color: var(--accent); }
+.rail li.done a { color: var(--muted); }
+.rail li.done a > span:last-child { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 70%, transparent); }
 main { padding: 36px 40px 80px; min-width: 0; }
 header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
