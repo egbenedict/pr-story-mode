@@ -86,6 +86,12 @@ main { overflow: auto; height: calc(100vh - 41px); }
 .plan-labels { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
 .plan-labels li { display: flex; gap: 8px; animation: fade-up .35s ease; }
 .plan-labels .n { flex: none; min-width: 18px; color: var(--muted); font: 11.5px/1.9 var(--mono); text-align: right; }
+.prep.finished .prep-bar { animation: none; background: var(--accent); background-size: 100% 100%; }
+.first-draft .first-label { display: flex; gap: 8px; font-weight: 600; margin-bottom: 6px; }
+.first-draft .first-label .n { color: var(--muted); font: 11.5px/1.9 var(--mono); }
+.first-draft p + p { white-space: pre-wrap; }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+.layout { animation: fade-in .35s ease; }
 .prep-foot { margin: 4px 0 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .caret { display: inline-block; width: 7px; height: 1.05em; margin-left: 3px; vertical-align: text-bottom; background: var(--accent); border-radius: 1px; animation: blink 1s steps(1) infinite; }
 
@@ -110,7 +116,7 @@ main { overflow: auto; height: calc(100vh - 41px); }
 .rail li.writing a { color: var(--ink); opacity: 1; }
 
 @media (prefers-reduced-motion: reduce) {
-  .prep-bar, .stages .dot, .caret, .skeleton span, .pulse, .rail-state, .pending-step .step-marker, .plan-labels li, .draft p, .stage-detail { animation: none !important; }
+  .layout, .prep-bar, .stages .dot, .caret, .skeleton span, .pulse, .rail-state, .pending-step .step-marker, .plan-labels li, .draft p, .stage-detail { animation: none !important; }
   .write-progress > span { transition: none; }
 }
 .banner { border: 1px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); border-radius: 8px; padding: 8px 12px; margin: 0 0 20px; font-size: 13.5px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -125,14 +131,20 @@ main { overflow: auto; height: calc(100vh - 41px); }
 @media (max-width: 860px) { .layout, .rail, main { height: auto; overflow: visible; } }
 `;
 
-/** What the loading screen knows so far, before the step order is settled. */
+/** What the loading screen knows so far, until the first step is written. */
 type Prep = {
   started: number;
-  stage: 0 | 1 | 2; // reading the PR, splitting it into changes, planning the order
+  /** Reading the PR, splitting it, planning the order, finding context, starting the walkthrough; 5 when all are done. */
+  stage: 0 | 1 | 2 | 3 | 4 | 5;
   pr?: { title: string; ref: string; files: number; add: number; del: number };
   atoms?: { n: number; mechanical: number };
   plan?: { summary: string; labels: string[] };
   note?: string; // "Fixing the order (round 2)", "Summarizing changes (3 of 8)"
+  steps?: number; // once the order is settled
+  context?: { snippets: number; steps: number; extraFiles: number };
+  /** The first step's label, and its words so far while it is written. */
+  first?: { label: string; draft?: string };
+  written?: number; // steps written by the time the card finishes
   model: string | null; // null: no model
   usage: Required<Usage>;
 };
@@ -313,7 +325,7 @@ function App() {
               usage.cacheReadTokens += u.cacheReadTokens ?? 0;
               usage.cacheWriteTokens += u.cacheWriteTokens ?? 0;
               setLive((l) => (l ? { ...l, usage: { ...usage } } : l));
-              if (!planned) setPrep((p) => ({ ...p, usage: { ...usage } }));
+              if (!revealed) setPrep((p) => ({ ...p, usage: { ...usage } }));
             },
             (chars) => {
               const now = Date.now();
@@ -321,14 +333,30 @@ function App() {
               lastShown = now;
               const shown = withStreamed(usage, chars);
               setLive((l) => (l ? { ...l, usage: shown } : l));
-              if (!planned) setPrep((p) => ({ ...p, usage: shown }));
+              if (!revealed) setPrep((p) => ({ ...p, usage: shown }));
             },
           )
         : null;
       let lastShown = 0;
-      let planned = false;
       let steps: (StoryStep | undefined)[] = [];
       let drafts: Record<number, string> = {};
+      // The loading card stays up until the first step is written; then, after a moment with every
+      // stage ticked off, the story takes over with whatever has arrived by then.
+      let view: StoryView | null = null;
+      let revealed = false;
+      let reveal: Promise<void> | null = null;
+      const finishCard = () => {
+        if (reveal) return reveal;
+        setPrep((p) => ({ ...p, stage: 5 }));
+        reveal = new Promise<void>((done) =>
+          setTimeout(() => {
+            revealed = true;
+            if (view) setLive({ view: { ...view, steps }, writing: { drafts, note: note(), started }, usage: { ...usage }, model, provider: providerId });
+            done();
+          }, 700),
+        );
+        return reveal;
+      };
       const note = () => {
         const n = steps.filter(Boolean).length;
         return `Writing step ${Math.min(n + 1, steps.length)} of ${steps.length}`;
@@ -344,14 +372,15 @@ function App() {
           if (e.type === "order-attempt" && e.errors.length) setPrep((p) => ({ ...p, note: `Fixing the order (round ${e.round + 2})`, plan: undefined }));
           if (e.type === "summarize") setPrep((p) => ({ ...p, note: `Summarizing ${e.total} batches of changes first (${e.done} done)` }));
           if (e.type === "plan") {
-            planned = true;
             steps = e.plan.steps.map(() => undefined);
-            const view: StoryView = { pr, atoms: e.atoms, summary: e.plan.summary, plan: e.plan.steps, steps, mechanical: e.plan.mechanical, headSha: pr.headSha };
-            setLive({ view, writing: { drafts, note: "Finding unchanged code that helps", started }, usage: { ...usage }, model, provider: providerId });
+            view = { pr, atoms: e.atoms, summary: e.plan.summary, plan: e.plan.steps, steps, mechanical: e.plan.mechanical, headSha: pr.headSha };
+            const labels = e.plan.steps.map((s) => s.label);
+            setPrep((p) => ({ ...p, stage: 3, note: undefined, steps: labels.length, plan: { summary: e.plan.summary, labels }, ...(labels.length ? { first: { label: labels[0] } } : {}) }));
           }
-          if (e.type === "stage" && e.stage === "explain") setLive((l) => (l?.writing ? { ...l, writing: { ...l.writing, note: note() } } : l));
+          if (e.type === "context") setPrep((p) => ({ ...p, stage: 4, context: { snippets: e.snippets, steps: e.steps, extraFiles: e.extraFiles } }));
           if (e.type === "draft") {
             drafts = { ...drafts, [e.index]: e.text };
+            if (!revealed && e.index === steps.findIndex((x) => !x)) setPrep((p) => (p.first ? { ...p, first: { ...p.first, label: view?.plan[e.index]?.label ?? p.first.label, draft: e.text } } : p));
             setLive((l) => (l?.writing ? { ...l, writing: { ...l.writing, drafts } } : l));
           }
           if (e.type === "step") {
@@ -359,10 +388,16 @@ function App() {
             steps[e.index] = e.step;
             const { [e.index]: _done, ...rest } = drafts;
             drafts = rest;
+            if (!revealed) {
+              const n = steps.filter(Boolean).length;
+              setPrep((p) => ({ ...p, written: n }));
+              void finishCard();
+            }
             setLive((l) => (l?.writing ? { ...l, view: { ...l.view, steps }, writing: { ...l.writing, drafts, note: note() } } : l));
           }
         },
       });
+      await finishCard(); // a story with no steps, or one so quick the card is still up
       const failure = base ? modelFailure(result) : null;
       const problem = failure ? `${failure} The story shows template text where the model didn't answer.` : null;
       setLive({ view: viewOf(pr, result), writing: null, usage: result.metrics.usage, model, provider: providerId, result, problem: problem ?? undefined });
@@ -549,7 +584,7 @@ function App() {
   );
 }
 
-const STAGES = ["Read the pull request", "Split it into changes", "Plan the reading order", "Find unchanged code that helps", "Write the walkthrough"];
+const STAGES = ["Read the pull request", "Split it into changes", "Plan the reading order", "Find unchanged code that helps", "Start the walkthrough"];
 
 /** The loading screen: each stage with what it found, and the plan appearing as the model writes it. */
 function Preparing({ prep }: { prep: Prep }) {
@@ -562,10 +597,24 @@ function Preparing({ prep }: { prep: Prep }) {
       if (!prep.plan?.summary && !prep.plan?.labels.length) return prep.note ?? "The model is reading the changes…";
       return prep.note ?? null;
     }
+    if (i === 2 && prep.stage > 2 && prep.steps != null) return `${prep.steps} step${prep.steps === 1 ? "" : "s"}`;
+    if (i === 3 && prep.stage === 3) return "Looking through the repository…";
+    if (i === 3 && prep.context) {
+      const c = prep.context;
+      if (!c.snippets) return "Nothing outside the changes was needed";
+      return `${c.snippets} snippet${c.snippets === 1 ? "" : "s"} for ${c.steps} step${c.steps === 1 ? "" : "s"}${c.extraFiles ? `, from ${c.extraFiles} file${c.extraFiles === 1 ? "" : "s"} outside the PR` : ""}`;
+    }
+    if (i === 4 && prep.stage === 4) return !prep.model ? "Template text, since no model is set up" : prep.first?.draft ? null : "The model is reading the first step…";
+    if (i === 4 && prep.stage === 5) {
+      const n = prep.steps ?? 0;
+      const w = prep.written ?? 0;
+      if (n <= 1 || w >= n) return n > 1 ? `All ${n} steps are ready` : "Ready";
+      return w > 1 ? `${w} steps are ready; the rest are written as you read` : "Step 1 is ready; the rest are written as you read";
+    }
     return null;
   };
   return (
-    <div className="prep">
+    <div className={`prep${prep.stage === 5 ? " finished" : ""}`}>
       <div className="prep-bar" aria-hidden="true" />
       <p className="prep-kicker">Preparing the story</p>
       <h1>{prep.pr ? <Inline text={prep.pr.title} /> : "Opening the pull request…"}</h1>
@@ -587,6 +636,18 @@ function Preparing({ prep }: { prep: Prep }) {
                 <span className="stage-name">{name}</span>
                 {d ? <span className="stage-detail">{d}</span> : null}
                 {i === 2 && prep.stage === 2 && prep.plan ? <PlanDraft plan={prep.plan} /> : null}
+                {i === 4 && prep.stage === 4 && prep.first?.draft ? (
+                  <div className="plan-draft first-draft">
+                    <p className="plan-summary first-label">
+                      <span className="n">1</span>
+                      <Inline text={closeTicks(prep.first.label)} />
+                    </p>
+                    <p className="plan-summary">
+                      <Inline text={closeTicks(prep.first.draft)} />
+                      <span className="caret" aria-hidden="true" />
+                    </p>
+                  </div>
+                ) : null}
               </div>
             </li>
           );

@@ -14,6 +14,8 @@ export type PipelineEvent =
   | OrderEvent
   /** The diff is split into atoms. */
   | { type: "atoms"; atoms: number; mechanical: number; files: number }
+  /** Unchanged code was found for the steps: snippets in all, and files read from outside the PR. */
+  | { type: "context"; snippets: number; steps: number; extraFiles: number }
   /** The step order is settled: readers can show the outline and code before explanations arrive. */
   | { type: "plan"; atoms: ChangeAtom[]; plan: Plan; fallback: boolean }
   | { type: "step"; index: number; step: StoryStep }
@@ -109,6 +111,7 @@ export async function runPipeline(
     ? { context: [], stats: { snippets: 0, stepsWithContext: 0, extraFiles: 0 } }
     : await retrieveContext(pr, atoms, order.plan.steps, opts.host, { source: opts.contextSource });
   const tContext = Date.now();
+  emit({ type: "context", snippets: ctx.stats.snippets, steps: ctx.stats.stepsWithContext, extraFiles: ctx.stats.extraFiles });
 
   // A carried-over step is kept only if its unchanged context is the same too.
   const reused = new Map<number, StoryStep>();
