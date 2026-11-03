@@ -2,12 +2,14 @@
 export const READER_CSS = `:root {
   --bg: #fbfaf8; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e6e3dd; --accent: #c2410c;
   --add-bg: #e9f6ec; --add-ink: #1a6b34; --del-bg: #fbeaea; --del-ink: #a12a2a; --ctx-bg: #f4f2ee; --code: #26251f;
+  --mark-bg: #fdf1b8; --mark-ink: #8a6100;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
   :root { --bg: #161614; --panel: #1e1e1b; --ink: #ecebe6; --muted: #9b9a93; --line: #34332e; --accent: #fb923c;
-    --add-bg: #15301e; --add-ink: #7fd69a; --del-bg: #3a1a1a; --del-ink: #f2a0a0; --ctx-bg: #22221f; --code: #e3e2dc; }
+    --add-bg: #15301e; --add-ink: #7fd69a; --del-bg: #3a1a1a; --del-ink: #f2a0a0; --ctx-bg: #22221f; --code: #e3e2dc;
+    --mark-bg: #3d3412; --mark-ink: #f5cf55; }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 var(--sans); }
@@ -88,8 +90,11 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .tag-unchanged { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; margin-right: 4px; }
 .diff.ctx { color: var(--muted); }
 .diff.ctx .code { padding-left: 14px; }
-.diff.ctx tr.focus td.code { color: var(--ink); background: color-mix(in srgb, var(--accent) 7%, transparent); }
-.diff.ctx tr.focus td.ln { color: var(--accent); opacity: 1; }
+/* Unchanged code is highlighted in marker yellow, so it never reads as a deletion. */
+.diff.ctx tr.focus td.code { color: var(--ink); background: var(--mark-bg); }
+.diff.ctx tr.focus td.ln { color: var(--mark-ink); opacity: 1; }
+.diff.ctx tr.hl td { box-shadow: inset 3px 0 0 var(--mark-ink); }
+.diff.ctx tr.hl td.code { background: var(--mark-bg); color: var(--ink); }
 .diff.ctx tr.ctx-open td.code { color: var(--ink); }
 .cite.ctx { border-style: dashed; }
 .mechanical { margin: 48px 0 0 50px; border-top: 1px solid var(--line); padding-top: 16px; }
