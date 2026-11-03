@@ -235,6 +235,8 @@ export type ReviewComment = {
   commitId: string;
   originalCommitId: string;
   body: string;
+  /** The body as GitHub renders it (sanitized by GitHub; sanitize again before showing it). */
+  bodyHtml?: string;
   user: string;
   avatarUrl?: string;
   createdAt: string;
@@ -257,6 +259,7 @@ type RawComment = {
   commit_id: string;
   original_commit_id: string;
   body: string;
+  body_html?: string;
   user?: { login: string; avatar_url?: string } | null;
   created_at: string;
   html_url: string;
@@ -276,6 +279,7 @@ function toComment(c: RawComment): ReviewComment {
     commitId: c.commit_id,
     originalCommitId: c.original_commit_id,
     body: c.body,
+    ...(c.body_html ? { bodyHtml: c.body_html } : {}),
     user: c.user?.login ?? "ghost",
     ...(c.user?.avatar_url ? { avatarUrl: c.user.avatar_url } : {}),
     createdAt: c.created_at,
@@ -291,13 +295,26 @@ const commentFields = (c: NewComment) => ({
   ...(c.startLine != null && c.startLine !== c.line ? { start_line: c.startLine, start_side: c.startSide ?? c.side } : {}),
 });
 
+/** Ask for comments with both the Markdown body and GitHub's rendered HTML. */
+const FULL = "application/vnd.github.full+json";
+
+/**
+ * Markdown rendered the way GitHub renders comments (issue links, mentions and code in this
+ * repository resolve). The HTML is GitHub's; sanitize it before showing it.
+ */
+export async function renderMarkdown(ref: PRRef, opts: GitHubOptions, text: string): Promise<string> {
+  const req = githubRequester(ref, opts);
+  const res = await req("POST", "/markdown", { accept: "text/html", body: { text, mode: "gfm", context: `${ref.owner}/${ref.repo}` } });
+  return res.text();
+}
+
 /** Every review comment on the PR (up to 1,000), oldest first. */
 export async function fetchReviewComments(ref: PRRef, opts: GitHubOptions = {}): Promise<ReviewComment[]> {
   const get = githubGetter(ref, opts);
   const base = `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}`;
   const out: RawComment[] = [];
   for (let page = 1; page <= 10; page++) {
-    const batch = (await (await get(`${base}/comments?per_page=100&page=${page}`)).json()) as RawComment[];
+    const batch = (await (await get(`${base}/comments?per_page=100&page=${page}`, FULL)).json()) as RawComment[];
     out.push(...batch);
     if (batch.length < 100) break;
   }
@@ -307,14 +324,14 @@ export async function fetchReviewComments(ref: PRRef, opts: GitHubOptions = {}):
 /** Post one comment right away (GitHub's "Add single comment"). */
 export async function createReviewComment(ref: PRRef, opts: GitHubOptions, commitId: string, c: NewComment): Promise<ReviewComment> {
   const req = githubRequester(ref, opts);
-  const res = await req("POST", `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments`, { body: { commit_id: commitId, ...commentFields(c) } });
+  const res = await req("POST", `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments`, { accept: FULL, body: { commit_id: commitId, ...commentFields(c) } });
   return toComment((await res.json()) as RawComment);
 }
 
 /** Reply in an existing thread; `commentId` is the thread's first comment. */
 export async function replyToReviewComment(ref: PRRef, opts: GitHubOptions, commentId: number, body: string): Promise<ReviewComment> {
   const req = githubRequester(ref, opts);
-  const res = await req("POST", `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments/${commentId}/replies`, { body: { body } });
+  const res = await req("POST", `/repos/${ref.owner}/${ref.repo}/pulls/${ref.number}/comments/${commentId}/replies`, { accept: FULL, body: { body } });
   return toComment((await res.json()) as RawComment);
 }
 

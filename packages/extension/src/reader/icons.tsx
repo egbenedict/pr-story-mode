@@ -5,6 +5,14 @@ const paths = {
   review: "M3 4.5A1.5 1.5 0 0 1 4.5 3h7A1.5 1.5 0 0 1 13 4.5v5A1.5 1.5 0 0 1 11.5 11H7l-3 2.5V11h0.5A1.5 1.5 0 0 1 3 9.5z M5.8 7l1.5 1.5 2.9-3",
   settings: "M3 4.5h6 M12 4.5h1 M3 8h1 M7 8h6 M3 11.5h4 M10 11.5h3 M10.5 3v3 M5.5 6.5v3 M8.5 10v3",
   close: "M4.5 4.5l7 7 M11.5 4.5l-7 7",
+  bold: "M5 3h4a2.5 2.5 0 0 1 0 5H5z M5 8h4.8a2.5 2.5 0 0 1 0 5H5z",
+  italic: "M7 3h5 M4 13h5 M9.5 3l-3 10",
+  code: "M5.5 4.5L2 8l3.5 3.5 M10.5 4.5L14 8l-3.5 3.5",
+  link: "M7 9a2.8 2.8 0 0 0 4 0l2-2a2.8 2.8 0 0 0-4-4l-.8.8 M9 7a2.8 2.8 0 0 0-4 0L3 9a2.8 2.8 0 0 0 4 4l.8-.8",
+  quote: "M3 4v8 M6 5h7 M6 8h7 M6 11h5",
+  bullets: "M6 4.5h7 M6 8h7 M6 11.5h7 M3 4.5h.01 M3 8h.01 M3 11.5h.01",
+  numbers: "M6.5 4.5h6.5 M6.5 8h6.5 M6.5 11.5h6.5 M2.5 3.5l1-.5v3 M2.5 9.2a1 1 0 0 1 2 .1c0 .7-2 1.5-2 2.2h2",
+  suggest: "M3 4h6 M6 1v6 M3 12h6 M11 3v10 M11 13l-2-2 M11 13l2-2",
 } as const;
 
 export type IconName = keyof typeof paths;

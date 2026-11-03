@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commentableLines, commentRange, createReviewComment, diffPlaces, inCommentRange, fetchPullRequest, fetchReviewComments, GitHubError, lineKey, linkedIssueNumbers, parseUnifiedDiff, placeThreads, prHeader, rowTarget, submitReview, type PRInput, type ReviewComment } from "../src/index";
+import { commentableLines, commentRange, createReviewComment, renderMarkdown, diffPlaces, inCommentRange, fetchPullRequest, fetchReviewComments, GitHubError, lineKey, linkedIssueNumbers, parseUnifiedDiff, placeThreads, prHeader, rowTarget, submitReview, type PRInput, type ReviewComment } from "../src/index";
 
 describe("linked issues", () => {
   it("finds issues the description fixes, closes or resolves in the same repository", () => {
@@ -147,6 +147,21 @@ describe("review comments", () => {
     expect(rev.calls[0].url).toBe("https://api.github.com/repos/o/r/pulls/5/reviews");
     expect(rev.calls[0].body).toEqual({ commit_id: "head", body: "Looks good", event: "APPROVE", comments: [{ path: "a.ts", body: "Why?", line: 11, side: "LEFT" }] });
     expect(res.url).toContain("pullrequestreview-3");
+  });
+
+  it("asks for rendered HTML with comments, and renders Markdown in the repository's context", async () => {
+    const accepts: string[] = [];
+    const list = (async (_: string | URL | Request, init?: RequestInit) => {
+      accepts.push(new Headers(init?.headers).get("accept") ?? "");
+      return Response.json([{ ...raw, body: "**hi**", body_html: "<p><strong>hi</strong></p>" }]);
+    }) as typeof fetch;
+    const [c] = await fetchReviewComments(ref, { fetchImpl: list });
+    expect(c).toMatchObject({ body: "**hi**", bodyHtml: "<p><strong>hi</strong></p>" });
+    expect(accepts).toEqual(["application/vnd.github.full+json"]);
+
+    const md = recorder(() => new Response("<p><em>x</em> <a href=\"https://github.com/o/r/issues/3\">#3</a></p>"));
+    expect(await renderMarkdown(ref, { token: "t", fetchImpl: md.fetchImpl }, "_x_ #3")).toContain("<em>x</em>");
+    expect(md.calls[0]).toMatchObject({ url: "https://api.github.com/markdown", method: "POST", body: { text: "_x_ #3", mode: "gfm", context: "o/r" } });
   });
 
   it("pages through comments and explains rejected input", async () => {

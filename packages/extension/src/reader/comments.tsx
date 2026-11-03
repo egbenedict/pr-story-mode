@@ -2,7 +2,9 @@
 // a time or collected into a review, all through GitHub's normal review API. Teammates without the
 // extension see ordinary review comments.
 
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
+import { apply, format, shortcut, suggestion, type Change, type Format } from "./markdown-edit";
+import { sanitizeHtml } from "./sanitize";
 import {
   atomSnippet,
   commentableLines,
@@ -14,6 +16,7 @@ import {
   GitHubError,
   lineKey,
   placeThreads,
+  renderMarkdown,
   type LineRange,
   replyToReviewComment,
   rowTarget,
@@ -25,7 +28,7 @@ import {
   type ReviewThread,
   type Side,
 } from "@prstory/core";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { loadSettings } from "../settings";
 import type { StoryView } from "./Story";
 
@@ -47,6 +50,41 @@ export const COMMENTS_CSS = `
 .cm-form { padding: 8px; }
 .cm-form textarea { display: block; width: 100%; min-height: 76px; font: 13.5px/1.5 var(--sans); padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); resize: vertical; }
 .cm-form textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+.cm-tabs { display: flex; align-items: center; gap: 2px; margin: 0 0 6px; flex-wrap: wrap; }
+.cm-tabs [role="tab"] { font: 500 12.5px var(--sans); background: none; border: 0; border-radius: 6px; padding: 4px 9px; color: var(--muted); cursor: pointer; }
+.cm-tabs [role="tab"]:hover:not(:disabled) { color: var(--ink); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.cm-tabs [role="tab"].on { color: var(--ink); background: color-mix(in srgb, var(--ink) 9%, transparent); }
+.cm-tabs [role="tab"]:disabled { opacity: .45; cursor: default; }
+.cm-tools { margin-left: auto; display: inline-flex; align-items: center; gap: 1px; }
+.cm-tool { display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 26px; min-width: 26px; padding: 0 5px; border: 0; border-radius: 6px; background: none; color: var(--muted); font: 500 12px var(--sans); cursor: pointer; }
+.cm-tool:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.cm-tool:focus-visible, .cm-tabs [role="tab"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cm-tool.wide { padding: 0 8px 0 6px; }
+.cm-tool-sep { width: 1px; height: 16px; margin: 0 4px; background: var(--line); }
+.cm-preview { min-width: 0; overflow-wrap: anywhere; min-height: 76px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-size: 13.5px; }
+.cm-preview .muted { margin: 0; color: var(--muted); }
+.md-hint { color: var(--muted); }
+/* Markdown as GitHub renders it, in comments and previews. */
+.md { white-space: normal; line-height: 1.55; }
+.md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md table, .md details { margin: 0 0 8px; }
+.md ul, .md ol { padding-left: 22px; }
+.md li + li { margin-top: 2px; }
+.md blockquote { padding: 0 0 0 10px; border-left: 3px solid var(--line); color: var(--muted); }
+.md code { font: 0.88em var(--mono); background: var(--ctx-bg); padding: 0.1em 0.35em; border-radius: 4px; }
+.md pre { background: var(--ctx-bg); padding: 8px 10px; border-radius: 6px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.md pre code { background: none; padding: 0; font-size: inherit; }
+.md a { color: var(--accent); }
+.md img { max-width: 100%; border-radius: 4px; }
+.md h1, .md h2, .md h3, .md h4 { font-size: 1em; margin: 10px 0 6px; }
+.md table { border-collapse: collapse; display: block; overflow: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 3px 8px; font-size: 12.5px; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+.md input[type="checkbox"] { margin: 0 6px 0 0; vertical-align: -1px; accent-color: var(--accent); }
+.md .blob-num { color: var(--muted); font: 11.5px var(--mono); padding: 0 6px; }
+.md .blob-code { font: 12.5px var(--mono); white-space: pre-wrap; padding: 0 6px; }
+.md .blob-code-deletion, .md .blob-num-deletion { background: var(--del-bg); }
+.md .blob-code-addition, .md .blob-num-addition { background: var(--add-bg); }
 .cm-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 8px; flex-wrap: wrap; }
 .cm-actions .hint { margin-right: auto; font-size: 12px; color: var(--muted); }
 .cm-btn { font: 13px var(--sans); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
@@ -108,6 +146,10 @@ type CommentsApi = {
   submit: (body: string, event: ReviewEvent) => Promise<string>;
   discardDrafts: () => void;
   hidden: ReviewThread[]; // threads not on any line the story shows
+  /** Markdown rendered by GitHub, sanitized, for the Preview tab. */
+  preview: (text: string) => Promise<string>;
+  /** The head file's text for lines start…end, for a suggestion; null when not available. */
+  headLines: (path: string, start: number, end: number) => string | null;
   threadCount: number;
   loadError: string | null;
 };
@@ -272,6 +314,12 @@ export function CommentsProvider({ prRef, view, current, children }: { prRef: PR
     },
     discardDrafts: () => setDrafts([]),
     hidden,
+    preview: async (text) => sanitizeHtml(await renderMarkdown(prRef, await gh(), text)),
+    headLines: (path, start, end) => {
+      const f = view.pr.files.find((x) => x.path === path);
+      const lines = f?.headText?.split("\n");
+      return lines && start >= 1 && end <= lines.length ? lines.slice(start - 1, end).join("\n") : null;
+    },
     threadCount: [...placed.values()].reduce((n, ts) => n + ts.length, unplaced.length),
     loadError,
   };
@@ -304,62 +352,174 @@ function CommentView({ c }: { c: ReviewComment }) {
           {ago(c.createdAt)}
         </a>
       </div>
-      <div className="cm-body">{c.body}</div>
+      <CommentBody c={c} />
     </div>
   );
 }
 
+/** A comment as GitHub renders it (sanitized again here), or its plain text when there's no HTML. */
+function CommentBody({ c }: { c: ReviewComment }) {
+  const html = useMemo(() => (c.bodyHtml ? sanitizeHtml(c.bodyHtml) : null), [c.bodyHtml]);
+  return html ? <div className="cm-body md" dangerouslySetInnerHTML={{ __html: html }} /> : <div className="cm-body">{c.body}</div>;
+}
+
 /** A text box with its own busy and error state. `actions` get the text and return when done. */
+const TOOLS: { f: Format; icon: IconName; label: string; keys: string }[] = [
+  { f: "bold", icon: "bold", label: "Bold", keys: "⌘B" },
+  { f: "italic", icon: "italic", label: "Italic", keys: "⌘I" },
+  { f: "code", icon: "code", label: "Code", keys: "⌘E" },
+  { f: "link", icon: "link", label: "Link", keys: "⌘K" },
+  { f: "quote", icon: "quote", label: "Quote", keys: "⌘⇧." },
+  { f: "bullets", icon: "bullets", label: "Bulleted list", keys: "⌘⇧8" },
+  { f: "numbers", icon: "numbers", label: "Numbered list", keys: "⌘⇧7" },
+];
+
+/**
+ * A Markdown comment box with its own busy and error state: a formatting toolbar and shortcuts, a
+ * Preview tab rendered by GitHub, and (on head lines) a suggested change. `actions` get the text.
+ */
 function Form({
   placeholder,
   actions,
   onCancel,
   hint,
   autoFocus,
+  suggest,
 }: {
   placeholder: string;
   actions: { label: string; primary?: boolean; run: (text: string) => Promise<void> | void; disabled?: boolean }[];
   onCancel: () => void;
   hint?: React.ReactNode;
   autoFocus?: boolean;
+  /** The commented lines' current code, offered as a suggestion block to edit. */
+  suggest?: string | null;
 }) {
+  const cm = useComments();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"write" | "preview">("write");
+  const [preview, setPreview] = useState<{ text: string; html?: string; error?: string } | null>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  // Grow with the text, up to a limit; the box can still be resized by hand.
+  useLayoutEffect(() => {
+    const ta = box.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${Math.min(Math.max(ta.scrollHeight + 2, 76), 360)}px`;
+  }, [text, tab]);
+
   const go = async (run: (t: string) => Promise<void> | void) => {
     setBusy(true);
     setError(null);
     try {
       await run(text.trim());
       setText("");
+      setTab("write");
     } catch (err) {
       setError(commentError(err));
     } finally {
       setBusy(false);
     }
   };
+
+  /** Apply an edit through the browser's own insert, so ⌘Z undoes it like typing. */
+  const change = (c: Change) => {
+    const ta = box.current;
+    if (!ta) return;
+    ta.focus();
+    ta.setSelectionRange(c.from, c.to);
+    const ok = document.execCommand?.("insertText", false, c.insert);
+    if (!ok) {
+      const next = apply({ text: ta.value, start: c.from, end: c.to }, c);
+      setText(next.text);
+      requestAnimationFrame(() => ta.setSelectionRange(next.start, next.end));
+      return;
+    }
+    ta.setSelectionRange(c.selStart, c.selEnd);
+  };
+  const edit = () => ({ text: box.current?.value ?? text, start: box.current?.selectionStart ?? text.length, end: box.current?.selectionEnd ?? text.length });
+
+  const showPreview = async () => {
+    setTab("preview");
+    if (!cm || preview?.text === text) return;
+    setPreview({ text });
+    try {
+      const html = await cm.preview(text);
+      setPreview((p) => (p?.text === text ? { text, html } : p));
+    } catch (err) {
+      setPreview((p) => (p?.text === text ? { text, error: commentError(err) } : p));
+    }
+  };
+
   return (
     <div className="cm-form">
-      <textarea
-        value={text}
-        placeholder={placeholder}
-        autoFocus={autoFocus}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") {
-            e.stopPropagation();
-            onCancel();
-          }
-          const primary = actions.find((a) => a.primary);
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && primary && text.trim() && !primary.disabled) {
-            e.preventDefault();
-            void go(primary.run);
-          }
-        }}
-      />
+      <div className="cm-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === "write"} className={tab === "write" ? "on" : ""} onClick={() => (setTab("write"), requestAnimationFrame(() => box.current?.focus()))}>
+          Write
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "preview"} className={tab === "preview" ? "on" : ""} disabled={!text.trim()} onClick={() => void showPreview()}>
+          Preview
+        </button>
+        {tab === "write" ? (
+          <span className="cm-tools" role="toolbar" aria-label="Formatting">
+            {TOOLS.map((t) => (
+              <button key={t.f} type="button" className="cm-tool" title={`${t.label} (${t.keys})`} aria-label={t.label} onMouseDown={(e) => e.preventDefault()} onClick={() => change(format(edit(), t.f))}>
+                <Icon name={t.icon} />
+              </button>
+            ))}
+            {suggest != null ? (
+              <>
+                <span className="cm-tool-sep" aria-hidden="true" />
+                <button type="button" className="cm-tool wide" title="Suggest a change to these lines; GitHub lets the author apply it in one click" onMouseDown={(e) => e.preventDefault()} onClick={() => change(suggestion(edit(), suggest))}>
+                  <Icon name="suggest" />
+                  <span>Suggest</span>
+                </button>
+              </>
+            ) : null}
+          </span>
+        ) : null}
+      </div>
+      {tab === "write" ? (
+        <textarea
+          ref={box}
+          value={text}
+          placeholder={placeholder}
+          autoFocus={autoFocus}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.stopPropagation();
+              onCancel();
+              return;
+            }
+            const primary = actions.find((a) => a.primary);
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && primary && text.trim() && !primary.disabled) {
+              e.preventDefault();
+              void go(primary.run);
+              return;
+            }
+            const f = shortcut(e);
+            if (f) {
+              e.preventDefault();
+              change(format(edit(), f));
+            }
+          }}
+        />
+      ) : (
+        <div className="cm-preview" aria-live="polite">
+          {preview?.html != null ? (
+            preview.html.trim() ? <div className="md" dangerouslySetInnerHTML={{ __html: preview.html }} /> : <p className="muted">Nothing to preview.</p>
+          ) : preview?.error ? (
+            <p className="cm-error">Couldn't render the preview: {preview.error}</p>
+          ) : (
+            <p className="muted">Rendering…</p>
+          )}
+        </div>
+      )}
       {error ? <p className="cm-error">{error}</p> : null}
       <div className="cm-actions">
-        {hint ? <span className="hint">{hint}</span> : null}
+        <span className="hint">{hint ?? <span className="md-hint">Markdown is supported</span>}</span>
         <button type="button" className="cm-btn" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
@@ -478,6 +638,7 @@ export function LineComments({ path, side, line }: { path: string; side: Side; l
         {composing ? (
           <Form
             key={`${c.startSide ?? ""}${c.startLine ?? ""}-${c.line}`}
+            suggest={c.side === "RIGHT" && (c.startSide ?? "RIGHT") === "RIGHT" ? cm.headLines(c.path, c.startLine ?? c.line, c.line) : null}
             placeholder={`Comment on ${range}${side === "LEFT" && c.startLine == null ? " (removed)" : ""}…`}
             autoFocus
             onCancel={cm.close}
