@@ -202,6 +202,9 @@ export function walkthrough(step: StoryStep, snippets: Map<string, SnippetRow[]>
   const take = (atomId: string, end: number): WalkChunk | null => {
     const rows = snippets.get(atomId) ?? [];
     const start = cursor.get(atomId)!;
+    // Unchanged lines after the atom's last change go with the beat that showed that change,
+    // instead of trailing alone after the step's last beat.
+    if (!rows.slice(end + 1).some((r) => r.type !== "context" && r.type !== "gap")) end = rows.length - 1;
     let slice = rows.slice(start, end + 1);
     cursor.set(atomId, end + 1);
     while (slice[0]?.type === "gap") slice = slice.slice(1);

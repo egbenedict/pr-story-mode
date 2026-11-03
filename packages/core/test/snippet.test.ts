@@ -104,6 +104,15 @@ describe("walkthrough", () => {
     expect(w.beats[1].code).toEqual([]);
   });
 
+  it("keeps the unchanged lines after an atom's last change with the beat that shows it", () => {
+    const g = atom("g", changedLines(file).filter((l) => (l.side === "LEFT" ? l.line === 8 : l.line === 12)));
+    const one = new Map([["g", atomSnippet(file, g)]]);
+    expect(one.get("g")!.at(-1)!.type).toBe("context");
+    const w = walkthrough({ atomIds: ["g"], label: "x", explanation: [{ text: "a", cites: [], through: { atomId: "g", line: 12 } }, { text: "b", cites: [] }] }, one);
+    expect(w.beats[0].code[0].rows).toEqual(one.get("g"));
+    expect(w.beats[1].code).toEqual([]);
+  });
+
   it("puts everything after a beat with no cuts", () => {
     const w = walkthrough(step([null]), snippets);
     expect(w.beats[0].code[0].rows).toEqual(rows);
