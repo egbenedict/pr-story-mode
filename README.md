@@ -2,7 +2,7 @@
 
 Turns a pull request into a near-linear, narrated story. The diff is broken into small **change atoms** (one function, method, class member, config key or import list each), ordered so concepts come before their uses, and explained step by step.
 
-This repo implements the [technical design](https://claude.ai/artifact/8sYLrCQsfX4pGtwiwS4FvP) as a CLI and a Chrome extension. **Phase 1** (ingest and parse, atoms, plan and validate, HTML output) is done. **Phase 2** (story quality) is nearly done: the symbol graph, unchanged context beside each step, staged ordering for large PRs, linked issues and the grounding check are in; the benchmark has not yet run with a model. **Phase 3** (the extension) has started: the reader, streaming, settings and caching work; comments, GitHub-only context and more providers are next.
+This repo implements the [technical design](https://claude.ai/artifact/8sYLrCQsfX4pGtwiwS4FvP) as a CLI and a Chrome extension. **Phase 1** (ingest and parse, atoms, plan and validate, HTML output) is done. **Phase 2** (story quality) is nearly done: the symbol graph, unchanged context beside each step, staged ordering for large PRs, linked issues and the grounding check are in; the benchmark has not yet run with a model. **Phase 3** (the extension) is under way: the reader, streaming, settings, caching and review comments work; reusing work after new pushes, GitHub-only context and more providers are next.
 
 ## Quick start
 
@@ -37,6 +37,7 @@ In Chrome, open `chrome://extensions`, turn on **Developer mode**, choose **Load
 - **Reader** (`src/reader/`): an extension page shown in a full-window overlay. It runs the whole pipeline in the browser: GitHub ingest, tree-sitter in WASM, ordering and explanation. The outline and code appear as soon as the order is settled, and explained steps stream in. The reader shows tokens and estimated cost while it writes, a per-step reviewed checkbox, raw diffs, citations that highlight lines, and a banner when the model failed or new commits have landed.
 - **Why an extension page and not the service worker**: Chrome stops idle service workers after about 30 seconds, and one model call can take longer. An extension page in an iframe also keeps GitHub's styles and content security policy out of the reader. The service worker only opens settings.
 - **Settings** (`src/options/`, `src/settings.ts`): stored in `chrome.storage.local`, never synced. A custom base URL (gateway or self-hosted server) asks Chrome for permission to reach that host. Settings are re-read on every run, so a key or token saved while a reader is open applies on the next try. When GitHub's rate limit is hit or a repository isn't found, the reader explains why and links to settings.
+- **Review comments** (`src/reader/comments.tsx`, `core/src/review.ts`): existing review threads show under their lines, with replies. The **+** beside a line number starts a comment (shift-click another line for a range). Post it on its own, or add it to a pending review that is kept in the browser until you submit it from **Finish review** as a comment, approval or change request. Everything goes through GitHub's review API, so teammates without the extension see ordinary review comments. Only lines inside the diff's hunks can take comments, the same rule GitHub applies. Threads the story can't show (outdated, or on hunk lines outside the story's snippets) are listed under the title. When the story is older than the PR's head, threads are placed only if they were written on the story's commit. Posting needs a fine-grained token with **Pull requests: Read and write**.
 - **Cache** (`src/cache.ts`): finished stories in IndexedDB, keyed by repository and PR number, with the head commit they cover. Reopening a PR is free; if new commits landed, the old story shows with a regenerate banner. Stories where the model failed are not cached.
 
 To work on the reader without loading the extension, serve `packages/extension/dist` locally and open `reader.html?pr=<PR URL>`; settings then fall back to the page's `localStorage`.
@@ -92,7 +93,7 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ## Tests and benchmark
 
 ```bash
-npm test            # 50 tests: diff parsing, GitHub ingest and rate-limit errors, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings
+npm test            # 55 tests: diff parsing, GitHub ingest, rate-limit errors and review comments, model failures, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings
 npm run typecheck
 ```
 
@@ -109,5 +110,5 @@ With context retrieval from the local clone (still no LLM), coverage holds on al
 ## Not done yet
 
 - Phase 2: context outside the PR's files for GitHub PRs without a local clone; the full 60-PR benchmark with a model. A 15-PR pilot on Opus 5.5 (5 each from Flask, ky and luau) cost $3.75: coverage held on all 15, no fallbacks or failed calls, 2 repair rounds, at most 5.4% of citations dropped by the grounding check, a median of 29 s to the first explained step. The full run should cost about $15.
-- Phase 3: comment round-trip to GitHub reviews; context from unchanged files for PRs without a local clone (the extension only uses the PR's own files for now); Bedrock, Vertex and Azure adapters; enterprise policy settings; re-using cached atoms when new commits land. The extension has not yet been tested loaded in Chrome, only its reader page served locally and its content script injected by hand on github.com.
+- Phase 3: re-using cached atoms and explanations when new commits land; context from unchanged files for PRs without a local clone (the extension only uses the PR's own files for now); Bedrock, Vertex and Azure adapters; enterprise policy settings. Review comments have been checked against a fake GitHub API, not yet on a real pull request.
 - The 200 to 500 PR benchmark, model comparison and reviewer study (Phase 4).

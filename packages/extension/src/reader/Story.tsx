@@ -5,6 +5,7 @@ import {
   lineCounts,
   reindentRuns,
   rowNumber,
+  rowTarget,
   walkthrough,
   type ChangeAtom,
   type Citation,
@@ -15,6 +16,7 @@ import {
   type WalkChunk,
 } from "@prstory/core";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { CommentButton, LineComments, useComments } from "./comments";
 
 /** What the reader shows; `steps[i]` is undefined until step i has been written. */
 export type StoryView = {
@@ -109,7 +111,8 @@ function inRange(r: SnippetRow, from: number, to: number): boolean {
   return (n != null && n >= from && n <= to) || (o != null && o >= from && o <= to);
 }
 
-function Row({ r, hl }: { r: SnippetRow; hl: boolean }) {
+function Row({ r, hl, path }: { r: SnippetRow; hl: boolean; path?: string }) {
+  const cm = useComments();
   if (r.type === "gap")
     return (
       <tr className="gap">
@@ -119,20 +122,45 @@ function Row({ r, hl }: { r: SnippetRow; hl: boolean }) {
   const sign = r.type === "add" ? "+" : r.type === "del" ? "−" : r.type === "reindent" ? "~" : "";
   const old = r.type === "add" ? "" : (r.oldLine ?? "");
   const neu = r.type === "del" ? "" : (r.newLine ?? "");
+  // Comments go on the base side for removed lines and the head side for everything else.
+  const t = path ? rowTarget(r) : null;
+  const button = t && path ? <CommentButton path={path} side={t.side} line={t.line} /> : null;
+  const sel = !!(t && path && cm?.selected(path, t.side, t.line));
   return (
-    <tr className={`${r.type}${hl ? " hl" : ""}`}>
-      <td className="ln">{old}</td>
-      <td className="ln">{neu}</td>
-      <td className="code">
-        <span className="sign">{sign}</span>
-        {r.text || " "}
-      </td>
-    </tr>
+    <>
+      <tr className={`${r.type}${hl ? " hl" : ""}${sel ? " sel" : ""}`}>
+        <td className="ln">
+          {t?.side === "LEFT" ? button : null}
+          {old}
+        </td>
+        <td className="ln">
+          {t?.side === "RIGHT" ? button : null}
+          {neu}
+        </td>
+        <td className="code">
+          <span className="sign">{sign}</span>
+          {r.text || " "}
+        </td>
+      </tr>
+      {t && path ? <LineComments path={path} side={t.side} line={t.line} /> : null}
+    </>
   );
 }
 
-function Fold({ rows, n, isHl }: { rows: SnippetRow[]; n: number; isHl: (r: SnippetRow) => boolean }) {
-  const hit = rows.some(isHl);
+/** Whether a row has comment threads, pending comments or the open comment box. */
+function useRowHasComments(path: string | undefined) {
+  const cm = useComments();
+  return (r: SnippetRow) => {
+    const t = path && cm ? rowTarget(r) : null;
+    if (!t || !cm || !path) return false;
+    const c = cm.composer;
+    return cm.threadsAt(path, t.side, t.line).length > 0 || cm.draftsAt(path, t.side, t.line).length > 0 || (!!c && c.path === path && c.side === t.side && c.line === t.line);
+  };
+}
+
+function Fold({ rows, n, isHl, path }: { rows: SnippetRow[]; n: number; isHl: (r: SnippetRow) => boolean; path?: string }) {
+  const hasComments = useRowHasComments(path);
+  const hit = rows.some(isHl) || rows.some(hasComments);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     if (hit) setOpen(true);
@@ -150,7 +178,7 @@ function Fold({ rows, n, isHl }: { rows: SnippetRow[]; n: number; isHl: (r: Snip
       </tbody>
       <tbody className={`fold-body${open ? " open" : ""}`}>
         {rows.map((r, i) => (
-          <Row key={i} r={r} hl={isHl(r)} />
+          <Row key={i} r={r} hl={isHl(r)} path={path} />
         ))}
       </tbody>
     </>
@@ -158,7 +186,8 @@ function Fold({ rows, n, isHl }: { rows: SnippetRow[]; n: number; isHl: (r: Snip
 }
 
 function DiffTable({ atomId, rows, cls, step }: { atomId: string; rows: SnippetRow[]; cls: string; step: number }) {
-  const { hl } = useContext(StoryCtx);
+  const { hl, byId } = useContext(StoryCtx);
+  const path = byId.get(atomId)?.file;
   const isHl = (r: SnippetRow) => !!hl && hl.step === step && hl.atomId === atomId && cls === "story" && inRange(r, hl.from, hl.to);
   const runs = useMemo(() => new Map(reindentRuns(rows, FOLD_MIN).map(([a, b, c]) => [a, [b, c] as const])), [rows]);
   const parts: ReactNode[] = [];
@@ -168,7 +197,7 @@ function DiffTable({ atomId, rows, cls, step }: { atomId: string; rows: SnippetR
       parts.push(
         <tbody key={key}>
           {plain.map((r, i) => (
-            <Row key={i} r={r} hl={isHl(r)} />
+            <Row key={i} r={r} hl={isHl(r)} path={path} />
           ))}
         </tbody>,
       );
@@ -179,7 +208,7 @@ function DiffTable({ atomId, rows, cls, step }: { atomId: string; rows: SnippetR
     if (run) {
       const [end, n] = run;
       flush(`p${i}`);
-      parts.push(<Fold key={`f${i}`} rows={rows.slice(i, end + 1)} n={n} isHl={isHl} />);
+      parts.push(<Fold key={`f${i}`} rows={rows.slice(i, end + 1)} n={n} isHl={isHl} path={path} />);
       i = end;
     } else plain.push(rows[i]);
   }
@@ -393,14 +422,17 @@ function Step({ i, step, done }: { i: number; step: StoryStep; done: boolean }) 
               </div>
             ))}
         </div>
-        <div className="rawview">
-          {withCode.map((a) => (
-            <div className="atom" key={a.id}>
-              <AtomHead atom={a} continued={false} />
-              <DiffTable atomId={a.id} rows={rawRows(a, files.get(a.file))} cls="raw-shown" step={i} />
-            </div>
-          ))}
-        </div>
+        {/* Rendered only while shown, so comment threads and boxes never exist twice on the page. */}
+        {raw ? (
+          <div className="rawview">
+            {withCode.map((a) => (
+              <div className="atom" key={a.id}>
+                <AtomHead atom={a} continued={false} />
+                <DiffTable atomId={a.id} rows={rawRows(a, files.get(a.file))} cls="raw-shown" step={i} />
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -447,7 +479,7 @@ function useReviewed(key: string): [Record<number, boolean>, (step: number, on: 
 }
 
 /** Summary, the continuous scroll of steps, mechanical changes, and the outline rail. */
-export function StoryReader({ view, writing, footer, banner }: { view: StoryView; writing: string | null; footer: ReactNode; banner?: ReactNode }) {
+export function StoryReader({ view, writing, footer, banner, headerExtra }: { view: StoryView; writing: string | null; footer: ReactNode; banner?: ReactNode; headerExtra?: ReactNode }) {
   const { pr, atoms } = view;
   const byId = useMemo(() => new Map(atoms.map((a) => [a.id, a])), [atoms]);
   const files = useMemo(() => new Map(pr.files.map((f) => [f.path, f])), [pr]);
@@ -552,6 +584,7 @@ export function StoryReader({ view, writing, footer, banner }: { view: StoryView
               ))}{" "}
               · head {view.headSha.slice(0, 7)} · {total} steps · {changedLines} changed lines
             </p>
+            {headerExtra}
             <div className="summary">
               <Blocks text={view.summary} />
             </div>

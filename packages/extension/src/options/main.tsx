@@ -124,7 +124,13 @@ function Options() {
         <label>
           <span>Personal access token (optional)</span>
           <input type="password" autoComplete="off" value={s.githubToken} onChange={(e) => set("githubToken", e.target.value)} placeholder="github_pat_…" />
-          <span className="hint">Needed for private repositories, and raises GitHub's limit of 60 requests an hour. A fine-grained token with read access to pull requests and contents is enough.</span>
+          <span className="hint">
+            Needed to post review comments and for private repositories, and raises GitHub's limit of 60 requests an hour. Create a{" "}
+            <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">
+              fine-grained token
+            </a>{" "}
+            with <b>Pull requests: Read and write</b> and <b>Contents: Read</b> for the repositories you review. Read-only is enough if you only read stories.
+          </span>
         </label>
       </fieldset>
 

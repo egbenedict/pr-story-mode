@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { getStory, putStory, storyKey } from "../cache";
 import { createBrowserHost } from "../grammars";
 import { loadSettings, missingModelReason, providerConfig, type Settings } from "../settings";
+import { COMMENTS_CSS, CommentsNote, CommentsProvider, ReviewButton } from "./comments";
 import { StoryReader, type StoryView } from "./Story";
 
 const READER_EXTRA_CSS = `
@@ -209,6 +210,7 @@ function App() {
           Regenerate
         </button>
       ) : null}
+      <ReviewButton />
       <button type="button" onClick={openSettings}>
         Settings
       </button>
@@ -221,7 +223,8 @@ function App() {
   );
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && sendClose();
+    // Esc closes the overlay, except while typing (a comment box handles its own Esc).
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) && sendClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -257,11 +260,19 @@ function App() {
         </button>
       </div>
     ) : undefined;
-    return (
+    const story = (
       <>
         {topbar}
-        <StoryReader view={live.view} writing={live.writing} footer={footer} banner={banner} />
+        <StoryReader view={live.view} writing={live.writing} footer={footer} banner={banner} headerExtra={<CommentsNote prUrl={live.view.pr.url} />} />
       </>
+    );
+    // Comments need a GitHub PR; a story without one (local preview) just reads.
+    return ref ? (
+      <CommentsProvider prRef={ref} view={live.view} current={!live.stale}>
+        {story}
+      </CommentsProvider>
+    ) : (
+      story
     );
   }
 
@@ -333,6 +344,6 @@ function ErrorScreen({ phase, retry }: { phase: Extract<Phase, { kind: "error" }
 }
 
 const style = document.createElement("style");
-style.textContent = READER_CSS + READER_EXTRA_CSS;
+style.textContent = READER_CSS + READER_EXTRA_CSS + COMMENTS_CSS;
 document.head.appendChild(style);
 createRoot(document.getElementById("root")!).render(<App />);

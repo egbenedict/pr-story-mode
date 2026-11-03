@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchPullRequest, GitHubError, linkedIssueNumbers, prHeader, type PRInput } from "../src/index";
+import { commentableLines, createReviewComment, fetchPullRequest, fetchReviewComments, GitHubError, lineKey, linkedIssueNumbers, parseUnifiedDiff, placeThreads, prHeader, rowTarget, submitReview, type PRInput, type ReviewComment } from "../src/index";
 
 describe("linked issues", () => {
   it("finds issues the description fixes, closes or resolves in the same repository", () => {
@@ -68,5 +68,82 @@ describe("GitHub ingest", () => {
     expect(err).toBeInstanceOf(GitHubError);
     expect(err).toMatchObject({ status: 403, kind: "rate-limit", resetAt: 1_800_000_000_000 });
     expect(err.message).toMatch(/add a GitHub token/);
+  });
+});
+
+describe("review comments", () => {
+  const ref = { host: "github.com", owner: "o", repo: "r", number: 5 };
+  const diff = ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts", "@@ -10,3 +10,3 @@", " keep();", "-old();", "+neu();", " tail();", ""].join("\n");
+  const file = parseUnifiedDiff(diff)[0];
+
+  it("allows comments only on lines inside the diff's hunks, on the side each line exists", () => {
+    const ok = commentableLines(file);
+    expect([...ok].map((k) => k.split("\u0000").slice(1).join(":")).sort()).toEqual(["LEFT:10", "LEFT:11", "LEFT:12", "RIGHT:10", "RIGHT:11", "RIGHT:12"]);
+    expect(ok.has(lineKey("a.ts", { side: "RIGHT", line: 13 }))).toBe(false);
+    expect(rowTarget({ type: "del", text: "", oldLine: 11 })).toEqual({ side: "LEFT", line: 11 });
+    expect(rowTarget({ type: "reindent", text: "", oldLine: 4, newLine: 5 })).toEqual({ side: "RIGHT", line: 5 });
+    expect(rowTarget({ type: "gap" })).toBeNull();
+  });
+
+  const comment = (o: Partial<ReviewComment> & { id: number }): ReviewComment => ({
+    path: "a.ts", side: "RIGHT", line: 11, startLine: null, startSide: null, originalLine: 11, originalStartLine: null,
+    commitId: "head", originalCommitId: "head", body: "b", user: "u", createdAt: "2026-01-01T00:00:00Z", url: "u", ...o,
+  });
+
+  it("groups replies under their thread and places threads for current and older stories", () => {
+    const cs = [
+      comment({ id: 1 }),
+      comment({ id: 2, inReplyTo: 1 }),
+      comment({ id: 3, line: null, originalLine: 4, commitId: "old", originalCommitId: "old" }), // outdated
+      comment({ id: 4, line: 20, originalLine: 18, commitId: "head", originalCommitId: "old" }), // written on old, moved since
+    ];
+    const now = placeThreads(cs, { headSha: "head", current: true });
+    expect(now.placed.get(lineKey("a.ts", { side: "RIGHT", line: 11 }))![0].replies.map((c) => c.id)).toEqual([2]);
+    expect(now.placed.has(lineKey("a.ts", { side: "RIGHT", line: 20 }))).toBe(true);
+    expect(now.unplaced.map((t) => t.root.id)).toEqual([3]);
+
+    // A story still at "old": thread 3 and 4 go where they were written; thread 1 (written on head) can't be placed.
+    const old = placeThreads(cs, { headSha: "old", current: false });
+    expect(old.placed.has(lineKey("a.ts", { side: "RIGHT", line: 4 }))).toBe(true);
+    expect(old.placed.has(lineKey("a.ts", { side: "RIGHT", line: 18 }))).toBe(true);
+    expect(old.unplaced.map((t) => t.root.id)).toEqual([1]);
+  });
+
+  function recorder(response: Response | (() => Response)) {
+    const calls: { url: string; method: string; body: unknown; auth: string | null }[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined, auth: new Headers(init?.headers).get("Authorization") });
+      return typeof response === "function" ? response() : response;
+    }) as typeof fetch;
+    return { calls, fetchImpl };
+  }
+  const raw = { id: 9, path: "a.ts", side: "RIGHT", line: 12, start_line: 10, start_side: "RIGHT", original_line: 12, original_start_line: 10, commit_id: "head", original_commit_id: "head", body: "Hi", user: { login: "me" }, created_at: "2026-01-01T00:00:00Z", html_url: "https://github.com/o/r/pull/5#discussion_r9" };
+
+  it("posts a multi-line comment and a review with GitHub's field names", async () => {
+    const one = recorder(() => Response.json(raw, { status: 201 }));
+    const c = await createReviewComment(ref, { token: "t", fetchImpl: one.fetchImpl }, "head", { path: "a.ts", side: "RIGHT", line: 12, startLine: 10, startSide: "RIGHT", body: "Hi" });
+    expect(one.calls[0]).toMatchObject({ url: "https://api.github.com/repos/o/r/pulls/5/comments", method: "POST", auth: "Bearer t" });
+    expect(one.calls[0].body).toEqual({ commit_id: "head", path: "a.ts", body: "Hi", line: 12, side: "RIGHT", start_line: 10, start_side: "RIGHT" });
+    expect(c).toMatchObject({ id: 9, user: "me", line: 12, startLine: 10 });
+
+    const rev = recorder(() => Response.json({ id: 3, html_url: "https://github.com/o/r/pull/5#pullrequestreview-3" }));
+    const res = await submitReview(ref, { token: "t", fetchImpl: rev.fetchImpl }, { commitId: "head", body: "Looks good", event: "APPROVE", comments: [{ path: "a.ts", side: "LEFT", line: 11, body: "Why?" }] });
+    expect(rev.calls[0].url).toBe("https://api.github.com/repos/o/r/pulls/5/reviews");
+    expect(rev.calls[0].body).toEqual({ commit_id: "head", body: "Looks good", event: "APPROVE", comments: [{ path: "a.ts", body: "Why?", line: 11, side: "LEFT" }] });
+    expect(res.url).toContain("pullrequestreview-3");
+  });
+
+  it("pages through comments and explains rejected input", async () => {
+    let n = 0;
+    const pages = recorder(() => Response.json(n++ === 0 ? Array.from({ length: 100 }, (_, i) => ({ ...raw, id: i + 1 })) : [{ ...raw, id: 101, in_reply_to_id: 1 }]));
+    const all = await fetchReviewComments(ref, { fetchImpl: pages.fetchImpl });
+    expect(all).toHaveLength(101);
+    expect(all[100].inReplyTo).toBe(1);
+    expect(pages.calls.map((c) => c.url.split("?")[1])).toEqual(["per_page=100&page=1", "per_page=100&page=2"]);
+
+    const bad = recorder(() => Response.json({ message: "Unprocessable Entity", errors: ["Can not approve your own pull request"] }, { status: 422 }));
+    const err = await submitReview(ref, { token: "t", fetchImpl: bad.fetchImpl }, { commitId: "head", body: "", event: "APPROVE", comments: [] }).catch((e) => e);
+    expect(err).toBeInstanceOf(GitHubError);
+    expect(err).toMatchObject({ kind: "invalid", detail: "Can not approve your own pull request" });
   });
 });
