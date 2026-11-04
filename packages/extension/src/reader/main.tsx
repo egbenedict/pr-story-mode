@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { getStory, putStory, repoKey, storyKey } from "../cache";
 import { createBrowserHost } from "../grammars";
-import { embedAllowed, loadSettings, missingModelReason, providerConfig, tokenFor, type Settings } from "../settings";
+import { DEFAULT_APPEARANCE, styledCss } from "../appearance";
+import { embedAllowed, loadSettings, missingModelReason, onSettingsChanged, providerConfig, tokenFor, type Settings } from "../settings";
 import { COMMENTS_CSS, CommentsNote, CommentsProvider, ReviewButton } from "./comments";
 import { DemoProvider } from "./demo";
 import { BrandMark, Icon } from "./icons";
@@ -29,12 +30,10 @@ const READER_EXTRA_CSS = `
 .tb.icon-only { width: 28px; padding: 0; justify-content: center; }
 .tb.attn { color: var(--accent); }
 .tb.attn::after { content: ""; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--bg); }
-.tb.primary { background: var(--accent); color: #fff; }
-.tb.primary:hover { background: color-mix(in srgb, var(--accent) 88%, #000); color: #fff; }
+.tb.primary { background: var(--accent); color: var(--on-accent); }
+.tb.primary:hover { background: color-mix(in srgb, var(--accent) 88%, #000); color: var(--on-accent); }
 .tb.primary .icon { opacity: 1; }
-.tb-badge { min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: rgba(255,255,255,.25); font: 600 11.5px/18px var(--sans); text-align: center; font-variant-numeric: tabular-nums; }
-/* The dark theme's accent is light, so dark text reads better on it. */
-@media (prefers-color-scheme: dark) { .tb.primary, .tb.primary:hover { color: #1f1307; } .tb.primary .tb-badge { background: rgba(0,0,0,.16); } }
+.tb-badge { min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: color-mix(in srgb, var(--on-accent) 22%, transparent); font: 600 11.5px/18px var(--sans); text-align: center; font-variant-numeric: tabular-nums; }
 .tb-sep { width: 1px; height: 18px; margin: 0 6px; background: var(--line); flex: none; }
 .topbar .pr-ref .spent { font-variant-numeric: tabular-nums; }
 .topbar .pr-ref .ref-name + .spent::before { content: "·"; margin: 0 7px; }
@@ -42,7 +41,7 @@ const READER_EXTRA_CSS = `
 @media (max-width: 560px) { .tb .tb-label { display: none; } .tb { padding: 0 7px; } }
 .start button { font: 13px var(--sans); background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 .start button:hover { border-color: var(--accent); color: var(--accent); }
-.start button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.start button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .layout { height: calc(100vh - 41px); }
 .rail { top: 0; height: calc(100vh - 41px); }
 main { overflow: auto; height: calc(100vh - 41px); }
@@ -73,7 +72,7 @@ main { overflow: auto; height: calc(100vh - 41px); }
 .stages > li { position: relative; display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 12px; padding-bottom: 16px; }
 .stages > li:not(:last-child)::before { content: ""; position: absolute; left: 9.5px; top: 22px; bottom: 2px; width: 1px; background: var(--line); }
 .stages > li.done:not(:last-child)::before { background: color-mix(in srgb, var(--accent) 45%, var(--line)); }
-.stages .dot { width: 20px; height: 20px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--line); background: var(--panel); display: grid; place-items: center; color: #fff; }
+.stages .dot { width: 20px; height: 20px; border-radius: 50%; box-sizing: border-box; border: 1.5px solid var(--line); background: var(--panel); display: grid; place-items: center; color: var(--on-accent); }
 .stages li.active .dot { border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent); border-top-color: var(--accent); animation: spin .9s linear infinite; }
 .stages li.done .dot { background: var(--accent); border-color: var(--accent); }
 .stage-name { font-size: 14px; line-height: 20px; }
@@ -714,7 +713,17 @@ function ErrorScreen({ phase, retry }: { phase: Extract<Phase, { kind: "error" }
   );
 }
 
+const BASE_CSS = READER_CSS + READER_EXTRA_CSS + COMMENTS_CSS;
 const style = document.createElement("style");
-style.textContent = READER_CSS + READER_EXTRA_CSS + COMMENTS_CSS;
+style.textContent = styledCss(BASE_CSS, DEFAULT_APPEARANCE);
 document.head.appendChild(style);
+// Hold the first paint for the saved appearance (a few milliseconds), so a custom theme doesn't flash.
+const root = document.documentElement;
+root.style.visibility = "hidden";
+const show = () => (root.style.visibility = "");
+const restyle = (s: Settings) => (style.textContent = styledCss(BASE_CSS, s.appearance));
+void loadSettings().then(restyle).finally(show);
+setTimeout(show, 300);
+// Changes made in the settings tab apply right away.
+onSettingsChanged(restyle);
 createRoot(document.getElementById("root")!).render(<App />);

@@ -24,6 +24,11 @@ function openOverlay(prUrl: string) {
     @media (prefers-color-scheme: dark) { iframe { background: #161614; } }
   </style><div class="wrap"><iframe title="PR Story Mode" allow="clipboard-write"></iframe></div>`;
   const iframe = root.querySelector("iframe")!;
+  // Match the reader's chosen theme while it loads.
+  void chrome.storage.local.get("settings").then((got) => {
+    const theme = (got.settings as { appearance?: { theme?: string } } | undefined)?.appearance?.theme;
+    if (theme === "light" || theme === "dark") iframe.style.background = theme === "dark" ? "#161614" : "#fbfaf8";
+  }).catch(() => {});
   iframe.src = chrome.runtime.getURL(`reader.html?pr=${encodeURIComponent(prUrl)}`);
   root.querySelector(".wrap")!.addEventListener("click", (e) => {
     if (e.target === e.currentTarget) closeOverlay();

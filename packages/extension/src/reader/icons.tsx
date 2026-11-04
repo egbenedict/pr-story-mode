@@ -30,8 +30,8 @@ export function BrandMark() {
   return (
     <svg className="brand-mark" viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false">
       <rect width="20" height="20" rx="5.5" fill="var(--accent)" />
-      <path d="M6 6.5h8 M6 10h5 M6 13.5h7" fill="none" stroke="#fff" strokeWidth="1.7" strokeLinecap="round" />
-      <circle cx="14" cy="10" r="1.3" fill="#fff" />
+      <path d="M6 6.5h8 M6 10h5 M6 13.5h7" fill="none" stroke="var(--on-accent, #fff)" strokeWidth="1.7" strokeLinecap="round" />
+      <circle cx="14" cy="10" r="1.3" fill="var(--on-accent, #fff)" />
     </svg>
   );
 }

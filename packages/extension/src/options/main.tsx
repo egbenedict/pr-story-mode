@@ -1,6 +1,8 @@
 import { DEFAULT_ANTHROPIC_MODEL } from "@prstory/providers";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { APPEARANCE_CSS, AppearanceSettings } from "./appearance";
+import { styledCss, type Appearance } from "../appearance";
 import { DEFAULT_SETTINGS, hostOrigins, loadSettings, normalizeHost, saveSettings, type ProviderName, type Settings } from "../settings";
 
 const PROVIDERS: { id: ProviderName; label: string; hint: string }[] = [
@@ -34,8 +36,8 @@ function ensureOrigins(origins: string[]): Promise<boolean> {
 }
 
 const CSS = `
-:root { --bg: #fbfaf8; --panel: #fff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e6e3dd; --accent: #c2410c; --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
-@media (prefers-color-scheme: dark) { :root { --bg: #161614; --panel: #1e1e1b; --ink: #ecebe6; --muted: #9b9a93; --line: #34332e; --accent: #fb923c; } }
+:root { --bg: #fbfaf8; --panel: #fff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e6e3dd; --accent: #c2410c; --on-accent: #fff; --ctx-bg: #f4f2ee; --code: #26251f; --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif; }
+@media (prefers-color-scheme: dark) { :root { --bg: #161614; --panel: #1e1e1b; --ink: #ecebe6; --muted: #9b9a93; --line: #34332e; --accent: #fb923c; --on-accent: #1f1307; --ctx-bg: #22221f; --code: #e3e2dc; } }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 var(--sans); }
 main { max-width: 620px; margin: 0 auto; padding: 40px 16px 80px; }
@@ -50,7 +52,7 @@ input[type=text], input[type=password], select { width: 100%; font: 14px var(--s
 .radio input { margin-top: 4px; accent-color: var(--accent); }
 .hint { color: var(--muted); font-size: 13px; }
 .row { display: flex; gap: 10px; align-items: center; }
-button { font: 600 14px var(--sans); background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 16px; cursor: pointer; }
+button { font: 600 14px var(--sans); background: var(--accent); color: var(--on-accent); border: 0; border-radius: 6px; padding: 8px 16px; cursor: pointer; }
 .saved { color: var(--muted); font-size: 13px; }
 .warn { color: var(--accent); font-size: 13px; }
 code { font: 0.9em ui-monospace, Menlo, monospace; }
@@ -64,8 +66,19 @@ function Options() {
   const [s, setS] = useState<Settings>(DEFAULT_SETTINGS);
   const [status, setStatus] = useState("");
   useEffect(() => {
-    void loadSettings().then(setS);
+    void loadSettings().then((got) => {
+      setS(got);
+      restyle(got.appearance);
+    });
   }, []);
+  // Appearance saves as it changes (merged into the saved settings, so unsaved fields above stay unsaved).
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const setAppearance = (appearance: Appearance) => {
+    setS((cur) => ({ ...cur, appearance }));
+    restyle(appearance);
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => void loadSettings().then((saved) => saveSettings({ ...saved, appearance })), 150);
+  };
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => {
     setS({ ...s, [k]: v });
     setStatus("");
@@ -218,6 +231,8 @@ function Options() {
         </button>
       </fieldset>
 
+      <AppearanceSettings value={s.appearance} onChange={setAppearance} />
+
       <div className="row">
         <button type="button" onClick={() => void save()}>
           Save
@@ -229,6 +244,10 @@ function Options() {
 }
 
 const style = document.createElement("style");
-style.textContent = CSS;
 document.head.appendChild(style);
+/** The settings page follows the chosen appearance too, so the choices can be seen as they're made. */
+function restyle(a: Appearance) {
+  style.textContent = styledCss(CSS + APPEARANCE_CSS, a);
+}
+restyle(DEFAULT_SETTINGS.appearance);
 createRoot(document.getElementById("root")!).render(<Options />);

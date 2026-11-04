@@ -1,18 +1,18 @@
 /** Stylesheet shared by the HTML preview (CLI) and the extension reader. */
 export const READER_CSS = `:root {
-  --bg: #fbfaf8; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e6e3dd; --accent: #c2410c;
+  --bg: #fbfaf8; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #e6e3dd; --accent: #c2410c; --on-accent: #ffffff;
   --add-bg: #e9f6ec; --add-ink: #1a6b34; --del-bg: #fbeaea; --del-ink: #a12a2a; --ctx-bg: #f4f2ee; --code: #26251f;
   --mark-bg: #fdf1b8; --mark-ink: #8a6100;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #161614; --panel: #1e1e1b; --ink: #ecebe6; --muted: #9b9a93; --line: #34332e; --accent: #fb923c;
+  :root { --bg: #161614; --panel: #1e1e1b; --ink: #ecebe6; --muted: #9b9a93; --line: #34332e; --accent: #fb923c; --on-accent: #1f1307;
     --add-bg: #15301e; --add-ink: #7fd69a; --del-bg: #3a1a1a; --del-ink: #f2a0a0; --ctx-bg: #22221f; --code: #e3e2dc;
     --mark-bg: #3d3412; --mark-ink: #f5cf55; }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 var(--sans); }
+body { margin: 0; background: var(--bg); color: var(--ink); font: var(--text-size, 15px)/1.6 var(--sans); }
 a { color: var(--accent); }
 code { font: 0.9em var(--mono); background: var(--ctx-bg); padding: 0.05em 0.3em; border-radius: 4px; }
 .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); max-width: 1320px; margin: 0 auto; }
@@ -43,11 +43,11 @@ code { font: 0.9em var(--mono); background: var(--ctx-bg); padding: 0.05em 0.3em
 main { padding: 36px 40px 80px; min-width: 0; }
 header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .sub { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
-.summary { font-size: 17px; max-width: 72ch; margin: 0 0 36px; }
+.summary { font-size: calc(var(--text-size, 15px) + 2px); max-width: 72ch; margin: 0 0 36px; }
 .summary p { margin: 0 0 10px; }
 .step { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 14px; margin-bottom: 44px; scroll-margin-top: 16px; }
 .step-marker { width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid var(--line); display: grid; place-items: center; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 2px; }
-.step.done .step-marker { background: var(--accent); border-color: var(--accent); color: #fff; }
+.step.done .step-marker { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .step-body { min-width: 0; }
 .step-tools { float: right; margin: 2px 0 6px 12px; }
 .beat + .beat { margin-top: 18px; }
@@ -76,12 +76,12 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 /* Raw diff shows only the code, as GitHub's Files view does: no explanations or unchanged context. */
 .step.show-raw .walk, .step.show-raw details.context, .step.show-raw .override { display: none; }
 .raw-label { margin: 0 0 8px; font-weight: 600; }
-.diff { width: 100%; border-collapse: collapse; font: 12.5px/1.5 var(--mono); color: var(--code); tab-size: 4; }
+.diff { width: 100%; border-collapse: collapse; font: var(--code-size, 12.5px)/1.5 var(--mono); color: var(--code); tab-size: 4; }
 .diff.raw { display: none; }
 .rawview .diff.raw, .atom.show-raw .diff.raw { display: table; }
 .atom.show-raw .diff.story { display: none; }
 .diff td { padding: 0 10px; vertical-align: top; }
-.diff .ln { width: 1%; min-width: 3.2em; text-align: right; color: var(--muted); user-select: none; font-size: 11.5px; opacity: .8; }
+.diff .ln { width: 1%; min-width: 3.2em; text-align: right; color: var(--muted); user-select: none; font-size: calc(var(--code-size, 12.5px) - 1px); opacity: .8; }
 .diff .code { white-space: pre-wrap; word-break: break-word; }
 .diff .sign { display: inline-block; width: 1.2em; user-select: none; }
 .diff tr.add { background: var(--add-bg); } .diff tr.add .sign { color: var(--add-ink); }

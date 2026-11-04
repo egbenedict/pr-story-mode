@@ -1,4 +1,5 @@
 import type { ProviderConfig } from "@prstory/providers";
+import { DEFAULT_APPEARANCE, withAppearanceDefaults, type Appearance } from "./appearance";
 
 export type ProviderName = "anthropic" | "openai" | "openai-compatible" | "none";
 
@@ -11,11 +12,13 @@ export type Settings = {
   githubToken: string; // for github.com
   /** GitHub Enterprise Server or Cloud (`acme.ghe.com`) hosts, each with its own token. */
   enterprise: EnterpriseHost[];
+  /** How the reader looks. */
+  appearance: Appearance;
 };
 
 export type EnterpriseHost = { host: string; token: string };
 
-export const DEFAULT_SETTINGS: Settings = { provider: "anthropic", model: "", apiKey: "", baseURL: "", effort: "", githubToken: "", enterprise: [] };
+export const DEFAULT_SETTINGS: Settings = { provider: "anthropic", model: "", apiKey: "", baseURL: "", effort: "", githubToken: "", enterprise: [], appearance: DEFAULT_APPEARANCE };
 
 /** "https://GitHub.Acme.com/org/repo" or "github.acme.com" → "github.acme.com"; null when it isn't a host name (or is github.com). */
 export function normalizeHost(input: string): string | null {
@@ -71,14 +74,31 @@ export async function loadSettings(): Promise<Settings> {
   }
 }
 
-function withDefaults(saved: Partial<Settings> | undefined): Settings {
+export function withDefaults(saved: Partial<Settings> | undefined): Settings {
   const s = { ...DEFAULT_SETTINGS, ...saved };
-  return { ...s, enterprise: Array.isArray(s.enterprise) ? s.enterprise.filter((e) => e && typeof e.host === "string") : [] };
+  return {
+    ...s,
+    enterprise: Array.isArray(s.enterprise) ? s.enterprise.filter((e) => e && typeof e.host === "string") : [],
+    appearance: withAppearanceDefaults(s.appearance),
+  };
 }
 
 export async function saveSettings(s: Settings): Promise<void> {
   if (hasChromeStorage()) await chrome.storage.local.set({ [KEY]: s });
   else localStorage.setItem(`prstory:${KEY}`, JSON.stringify(s));
+}
+
+/** Calls `cb` with the new settings whenever they're saved, from any tab. */
+export function onSettingsChanged(cb: (s: Settings) => void): void {
+  if (hasChromeStorage()) {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && changes[KEY]) cb(withDefaults(changes[KEY].newValue as Partial<Settings> | undefined));
+    });
+  } else if (typeof window !== "undefined") {
+    window.addEventListener("storage", (e) => {
+      if (e.key === `prstory:${KEY}`) cb(withDefaults(JSON.parse(e.newValue ?? "{}")));
+    });
+  }
 }
 
 /** The provider config for createProvider; "none" when no key is set for a provider that needs one. */
