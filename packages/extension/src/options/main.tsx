@@ -1,7 +1,7 @@
 import { DEFAULT_ANTHROPIC_MODEL } from "@prstory/providers";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { DEFAULT_SETTINGS, loadSettings, saveSettings, type ProviderName, type Settings } from "../settings";
+import { DEFAULT_SETTINGS, hostOrigins, loadSettings, normalizeHost, saveSettings, type ProviderName, type Settings } from "../settings";
 
 const PROVIDERS: { id: ProviderName; label: string; hint: string }[] = [
   { id: "anthropic", label: "Anthropic", hint: `Claude through the Anthropic API. Default model: ${DEFAULT_ANTHROPIC_MODEL}.` },
@@ -13,17 +13,24 @@ const PROVIDERS: { id: ProviderName; label: string; hint: string }[] = [
 /** Hosts the extension can reach without asking: the public APIs in the manifest. Others need a grant. */
 const BUILT_IN_HOSTS = ["api.anthropic.com", "api.openai.com"];
 
-async function ensureHostPermission(baseURL: string): Promise<boolean> {
-  if (!baseURL.trim() || typeof chrome === "undefined" || !chrome.permissions) return true;
-  let origin: string;
+/** The site a custom base URL needs, or null for the built-in APIs; undefined when it isn't a URL. */
+function baseUrlOrigin(baseURL: string): string | null | undefined {
+  if (!baseURL.trim()) return null;
   try {
     const u = new URL(baseURL);
-    if (BUILT_IN_HOSTS.includes(u.hostname)) return true;
-    origin = `${u.protocol}//${u.hostname}/*`;
+    return BUILT_IN_HOSTS.includes(u.hostname) ? null : `${u.protocol}//${u.hostname}/*`;
   } catch {
-    return false;
+    return undefined;
   }
-  return chrome.permissions.request({ origins: [origin] });
+}
+
+/**
+ * Ask Chrome, in one prompt, for every site these settings need. It's called first thing in the
+ * click, since Chrome only prompts during a user gesture; sites already granted don't prompt again.
+ */
+function ensureOrigins(origins: string[]): Promise<boolean> {
+  if (!origins.length || typeof chrome === "undefined" || !chrome.permissions) return Promise.resolve(true);
+  return chrome.permissions.request({ origins });
 }
 
 const CSS = `
@@ -46,6 +53,11 @@ input[type=text], input[type=password], select { width: 100%; font: 14px var(--s
 button { font: 600 14px var(--sans); background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 8px 16px; cursor: pointer; }
 .saved { color: var(--muted); font-size: 13px; }
 .warn { color: var(--accent); font-size: 13px; }
+code { font: 0.9em ui-monospace, Menlo, monospace; }
+.ghe { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 4px; }
+button.quiet { background: none; color: var(--ink); border: 1px solid var(--line); font-weight: 500; padding: 5px 12px; margin: 0 0 14px; }
+button.quiet:hover { border-color: var(--accent); color: var(--accent); }
+button.add { display: block; }
 `;
 
 function Options() {
@@ -60,12 +72,43 @@ function Options() {
   };
 
   const save = async () => {
-    if (!(await ensureHostPermission(s.baseURL))) {
-      setStatus("Not saved: the extension needs permission to reach that base URL.");
+    const base = baseUrlOrigin(s.baseURL);
+    if (base === undefined) {
+      setStatus("Not saved: the base URL isn't a valid URL.");
       return;
     }
-    await saveSettings(s);
-    setStatus("Saved. Open a pull request and press Story mode.");
+    // Enterprise hosts: drop empty rows, and refuse ones that aren't host names or repeat.
+    const enterprise: Settings["enterprise"] = [];
+    for (const e of s.enterprise) {
+      if (!e.host.trim() && !e.token.trim()) continue;
+      const host = normalizeHost(e.host);
+      if (!host) {
+        setStatus(`Not saved: "${e.host.trim() || "(empty)"}" isn't a GitHub Enterprise host name, like github.acme.com or acme.ghe.com.`);
+        return;
+      }
+      if (enterprise.some((x) => x.host === host)) {
+        setStatus(`Not saved: ${host} is listed twice.`);
+        return;
+      }
+      enterprise.push({ host, token: e.token.trim() });
+    }
+    const wanted = [...(base ? [base] : []), ...enterprise.flatMap((e) => hostOrigins(e.host))];
+    if (!(await ensureOrigins(wanted))) {
+      setStatus("Not saved: the extension needs permission to reach those sites.");
+      return;
+    }
+    // Give back access to enterprise hosts that were removed.
+    const before = await loadSettings();
+    const gone = before.enterprise.filter((e) => !enterprise.some((x) => x.host === e.host)).flatMap((e) => hostOrigins(e.host));
+    if (gone.length && typeof chrome !== "undefined" && chrome.permissions) await chrome.permissions.remove({ origins: gone }).catch(() => false);
+    const next = { ...s, enterprise };
+    await saveSettings(next);
+    setS(next);
+    setStatus(enterprise.length ? "Saved. Reload any open GitHub Enterprise pages to see the Story mode button." : "Saved. Open a pull request and press Story mode.");
+  };
+  const setHost = (i: number, patch: Partial<Settings["enterprise"][number]>) => {
+    setS({ ...s, enterprise: s.enterprise.map((e, k) => (k === i ? { ...e, ...patch } : e)) });
+    setStatus("");
   };
 
   const needsKey = s.provider === "anthropic" || s.provider === "openai";
@@ -132,6 +175,47 @@ function Options() {
             with <b>Pull requests: Read and write</b> and <b>Contents: Read</b> for the repositories you review. Read-only is enough if you only read stories.
           </span>
         </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>GitHub Enterprise</legend>
+        <p className="hint" style={{ marginTop: 0 }}>
+          For pull requests on GitHub Enterprise Server (your company's own address, like <code>github.acme.com</code>) or GitHub Enterprise Cloud with its own address (<code>acme.ghe.com</code>). Each host needs a token from that host: one from github.com won't work there. Saving asks Chrome for access to just these hosts.
+        </p>
+        {s.enterprise.map((e, i) => {
+          const host = normalizeHost(e.host);
+          return (
+            <div className="ghe" key={i}>
+              <label>
+                <span>Host</span>
+                <input type="text" value={e.host} onChange={(ev) => setHost(i, { host: ev.target.value })} placeholder="github.acme.com" spellCheck={false} />
+              </label>
+              <label>
+                <span>Token</span>
+                <input type="password" autoComplete="off" value={e.token} onChange={(ev) => setHost(i, { token: ev.target.value })} placeholder="github_pat_… or ghp_…" />
+                <span className="hint">
+                  {host ? (
+                    <>
+                      Create one at{" "}
+                      <a href={`https://${host}/settings/personal-access-tokens/new`} target="_blank" rel="noopener">
+                        {host}
+                      </a>{" "}
+                      with the same access as above. If your server has no fine-grained tokens, use a classic one with the <b>repo</b> scope.
+                    </>
+                  ) : (
+                    "A personal access token from that host."
+                  )}
+                </span>
+              </label>
+              <button type="button" className="quiet" onClick={() => (setS({ ...s, enterprise: s.enterprise.filter((_, k) => k !== i) }), setStatus(""))}>
+                Remove
+              </button>
+            </div>
+          );
+        })}
+        <button type="button" className="quiet add" onClick={() => (setS({ ...s, enterprise: [...s.enterprise, { host: "", token: "" }] }), setStatus(""))}>
+          Add an enterprise host
+        </button>
       </fieldset>
 
       <div className="row">

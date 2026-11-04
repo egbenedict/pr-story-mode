@@ -3,7 +3,10 @@
   "name": "PR Story Mode",
   "version": "0.1.0",
   "description": "Read a GitHub pull request as an ordered, narrated story where every changed line appears exactly once.",
-  "permissions": ["storage"],
+  "permissions": [
+    "storage",
+    "scripting"
+  ],
   "host_permissions": [
     "https://github.com/*",
     "https://api.github.com/*",
@@ -11,23 +14,53 @@
     "https://api.anthropic.com/*",
     "https://api.openai.com/*"
   ],
-  "optional_host_permissions": ["https://*/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["https://github.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://github.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["reader.html", "reader.js", "tree-sitter.wasm", "grammars/*"],
-      "matches": ["https://github.com/*"]
+      "resources": [
+        "reader.html",
+        "reader.js"
+      ],
+      "matches": [
+        "https://*/*"
+      ]
+    },
+    {
+      "resources": [
+        "tree-sitter.wasm",
+        "grammars/*"
+      ],
+      "matches": [
+        "https://github.com/*"
+      ]
     }
   ],
-  "options_ui": { "page": "options.html", "open_in_tab": true },
-  "action": { "default_title": "PR Story Mode settings" },
-  "background": { "service_worker": "background.js", "type": "module" },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "PR Story Mode settings"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   }

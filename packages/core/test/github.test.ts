@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commentableLines, commentRange, createReviewComment, renderMarkdown, diffPlaces, inCommentRange, fetchPullRequest, fetchReviewComments, GitHubError, lineKey, linkedIssueNumbers, parseUnifiedDiff, placeThreads, prHeader, rowTarget, submitReview, type PRInput, type ReviewComment } from "../src/index";
+import { commentableLines, commentRange, createReviewComment, defaultApiBase, parsePrUrl, renderMarkdown, diffPlaces, inCommentRange, fetchPullRequest, fetchReviewComments, GitHubError, lineKey, linkedIssueNumbers, parseUnifiedDiff, placeThreads, prHeader, rowTarget, submitReview, type PRInput, type ReviewComment } from "../src/index";
 
 describe("linked issues", () => {
   it("finds issues the description fixes, closes or resolves in the same repository", () => {
@@ -68,6 +68,39 @@ describe("GitHub ingest", () => {
     expect(err).toBeInstanceOf(GitHubError);
     expect(err).toMatchObject({ status: 403, kind: "rate-limit", resetAt: 1_800_000_000_000 });
     expect(err.message).toMatch(/add a GitHub token/);
+  });
+});
+
+describe("GitHub Enterprise", () => {
+  it("finds the API for github.com, Enterprise Cloud with its own address, and Enterprise Server", () => {
+    expect(defaultApiBase("github.com")).toBe("https://api.github.com");
+    expect(defaultApiBase("Acme.ghe.com")).toBe("https://api.acme.ghe.com");
+    expect(defaultApiBase("github.acme.com")).toBe("https://github.acme.com/api/v3");
+    expect(parsePrUrl("https://github.acme.com/team/api/pull/7/files")).toEqual({ host: "github.acme.com", owner: "team", repo: "api", number: 7 });
+  });
+
+  it("reads an enterprise PR through that host's API, never the public raw host, with the host's token", async () => {
+    const urls: string[] = [];
+    const auths: (string | null)[] = [];
+    const diff = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-x\n+y\n";
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      urls.push(url);
+      auths.push(new Headers(init?.headers).get("Authorization"));
+      const accept = new Headers(init?.headers).get("Accept") ?? "";
+      if (url.includes("/compare/")) return Response.json({ merge_base_commit: { sha: "base" } });
+      if (url.includes("/contents/")) return new Response("y\n");
+      if (accept.includes("diff")) return new Response(diff);
+      return Response.json({ title: "T", body: null, html_url: "https://acme.ghe.com/team/api/pull/7", base: { sha: "b0" }, head: { sha: "h1" } });
+    }) as typeof fetch;
+    const pr = await fetchPullRequest({ host: "acme.ghe.com", owner: "team", repo: "api", number: 7 }, { fetchImpl, token: "ghe-token" });
+    expect(pr.files[0].headText).toBe("y\n");
+    expect(urls.every((u) => u.startsWith("https://api.acme.ghe.com/repos/team/api/"))).toBe(true);
+    expect(auths.every((a) => a === "Bearer ghe-token")).toBe(true);
+
+    urls.length = 0;
+    await fetchPullRequest({ host: "github.acme.com", owner: "team", repo: "api", number: 7 }, { fetchImpl }); // no token: still not the raw host
+    expect(urls.every((u) => u.startsWith("https://github.acme.com/api/v3/repos/team/api/"))).toBe(true);
   });
 });
 

@@ -29,7 +29,7 @@ import {
   type Side,
 } from "@prstory/core";
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { loadSettings } from "../settings";
+import { loadSettings, tokenFor } from "../settings";
 import type { StoryView } from "./Story";
 
 export const COMMENTS_CSS = `
@@ -198,8 +198,9 @@ export function CommentsProvider({ prRef, view, current, children }: { prRef: PR
   const [hasToken, setHasToken] = useState(false);
   const [composer, setComposer] = useState<Composer | null>(null);
   const [drag, setDrag] = useState<Composer | null>(null);
-  const [drafts, setDrafts] = useDrafts(`prstory:drafts:${prRef.owner}/${prRef.repo}#${prRef.number}@${view.headSha}`);
-  const gh = async () => ({ token: (await loadSettings()).githubToken || undefined });
+  const repo = prRef.host.toLowerCase() === "github.com" ? `${prRef.owner}/${prRef.repo}` : `${prRef.host.toLowerCase()}/${prRef.owner}/${prRef.repo}`;
+  const [drafts, setDrafts] = useDrafts(`prstory:drafts:${repo}#${prRef.number}@${view.headSha}`);
+  const gh = async () => ({ token: tokenFor(await loadSettings(), prRef.host) });
 
   const reload = useCallback(async () => {
     try {
@@ -217,7 +218,7 @@ export function CommentsProvider({ prRef, view, current, children }: { prRef: PR
 
   // The token may be added in the settings tab while the reader is open.
   useEffect(() => {
-    const check = () => void loadSettings().then((s) => setHasToken(!!s.githubToken));
+    const check = () => void loadSettings().then((s) => setHasToken(!!tokenFor(s, prRef.host)));
     check();
     window.addEventListener("focus", check);
     return () => window.removeEventListener("focus", check);

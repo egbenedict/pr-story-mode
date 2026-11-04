@@ -55,3 +55,7 @@ export async function putStory(entry: CachedStory): Promise<void> {
     // A cache failure only means the story is generated again next time.
   }
 }
+
+/** The repository part of a story's key: `owner/repo` on github.com, `host/owner/repo` elsewhere. */
+export const repoKey = (ref: { host: string; owner: string; repo: string }) =>
+  ref.host.toLowerCase() === "github.com" ? `${ref.owner}/${ref.repo}` : `${ref.host.toLowerCase()}/${ref.owner}/${ref.repo}`;

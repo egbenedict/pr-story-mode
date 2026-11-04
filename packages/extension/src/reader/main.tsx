@@ -2,9 +2,9 @@ import { fetchPullHead, fetchPullRequest, GitHubError, githubContextSource, mode
 import { createProvider, estimateCost } from "@prstory/providers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { getStory, putStory, storyKey } from "../cache";
+import { getStory, putStory, repoKey, storyKey } from "../cache";
 import { createBrowserHost } from "../grammars";
-import { loadSettings, missingModelReason, providerConfig, type Settings } from "../settings";
+import { embedAllowed, loadSettings, missingModelReason, providerConfig, tokenFor, type Settings } from "../settings";
 import { COMMENTS_CSS, CommentsNote, CommentsProvider, ReviewButton } from "./comments";
 import { DemoProvider } from "./demo";
 import { BrandMark, Icon } from "./icons";
@@ -157,9 +157,27 @@ type Live = {
 
 const zeroUsage = (): Required<Usage> => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
 
-function errorPhase(err: unknown, settings: Settings | null): Phase {
-  const message = err instanceof Error ? err.message : String(err);
-  return err instanceof GitHubError ? { kind: "error", message, github: { kind: err.kind, resetAt: err.resetAt }, hasToken: !!settings?.githubToken } : { kind: "error", message };
+function errorPhase(err: unknown, settings: Settings | null, host: string): Phase {
+  let message = err instanceof Error ? err.message : String(err);
+  // The browser says only "Failed to fetch" when a host can't be reached at all.
+  if (!(err instanceof GitHubError) && /failed to fetch|networkerror|load failed/i.test(message)) {
+    message =
+      host.toLowerCase() === "github.com"
+        ? "Couldn't reach GitHub. Check your internet connection and try again."
+        : `Couldn't reach ${host}. If it's on your company's network, check that you're connected (for example to the VPN), and that ${host} is saved under GitHub Enterprise in settings.`;
+  }
+  return err instanceof GitHubError ? { kind: "error", message, github: { kind: err.kind, resetAt: err.resetAt }, hasToken: !!(settings && tokenFor(settings, host)) } : { kind: "error", message };
+}
+
+/**
+ * In the extension, the reader runs only inside a page on github.com or a GitHub Enterprise host
+ * saved in settings. Any other site that embeds it, or links to it directly, gets nothing: no
+ * settings are used, nothing is fetched and no cached story is shown. (The local dev server is exempt.)
+ */
+function embeddedSafely(s: Settings): boolean {
+  if (location.protocol === "http:" || location.protocol === "https:") return true;
+  const ancestors = location.ancestorOrigins ? Array.from(location.ancestorOrigins) : [];
+  return embedAllowed(ancestors, s);
 }
 
 /** A plain-language title and explanation for GitHub failures; null for everything else. */
@@ -275,8 +293,9 @@ function App() {
   /** `withModel` undefined: use the model when one is set up. Settings are re-read each time, since they may have changed in the settings tab. */
   async function generate(withModel?: boolean) {
     if (!ref || running.current) return;
-    running.current = true;
     const settings = await loadSettings();
+    if (!embeddedSafely(settings)) return;
+    running.current = true;
     settingsRef.current = settings;
     withModel ??= missingModelReason(settings) === null;
     const started = Date.now();
@@ -289,7 +308,7 @@ function App() {
       setLive(null);
       const base = DEMO ? new DemoProvider() : withModel ? createProvider(providerConfig(settings)) : null;
       setPrep((p) => ({ ...p, model: base?.model ?? null }));
-      const gh = { token: settings.githubToken || undefined };
+      const gh = { token: tokenFor(settings, ref.host) };
       const pr = await fetchPullRequest(ref, gh);
       let add = 0;
       let del = 0;
@@ -298,7 +317,7 @@ function App() {
       // Starts downloading likely context files now, while the model orders the steps.
       const contextSource = githubContextSource(ref, gh, pr);
       // A story for an earlier commit lets unchanged steps keep their explanations.
-      const cached = await getStory(storyKey(pr.repo ?? `${ref.owner}/${ref.repo}`, pr.number));
+      const cached = await getStory(storyKey(repoKey(ref), pr.number));
       const previous = cached && cached.headSha !== pr.headSha ? { pr: cached.pr, atoms: cached.result.atoms, story: cached.result.story } : null;
       const usage = zeroUsage();
       const model = base?.model ?? "none";
@@ -387,10 +406,10 @@ function App() {
       const problem = failure ? `${failure} The story shows template text where the model didn't answer.` : null;
       setLive({ view: viewOf(pr, result), writing: null, usage: result.metrics.usage, model, provider: providerId, result, problem: problem ?? undefined });
       // A story the model failed on is not kept, so the next open tries the model again.
-      if (!problem && !DEMO) await putStory({ key: storyKey(pr.repo ?? ref.repo, pr.number), headSha: pr.headSha, savedAt: Date.now(), pr, result });
+      if (!problem && !DEMO) await putStory({ key: storyKey(repoKey(ref), pr.number), headSha: pr.headSha, savedAt: Date.now(), pr, result });
     } catch (err) {
       setLive(null);
-      setPhase(errorPhase(err, settings));
+      setPhase(errorPhase(err, settings, ref.host));
     } finally {
       running.current = false;
     }
@@ -403,15 +422,19 @@ function App() {
     }
     void (async () => {
       const settings = await loadSettings();
+      if (!embeddedSafely(settings)) {
+        setPhase({ kind: "error", message: "PR Story Mode only opens inside github.com or a GitHub Enterprise host saved in its settings." });
+        return;
+      }
       settingsRef.current = settings;
       if (DEMO) return void generate(true);
-      const cached = await getStory(storyKey(`${ref.owner}/${ref.repo}`, ref.number));
+      const cached = await getStory(storyKey(repoKey(ref), ref.number));
       let head: string | null = null;
       try {
-        head = (await fetchPullHead(ref, { token: settings.githubToken || undefined })).headSha;
+        head = (await fetchPullHead(ref, { token: tokenFor(settings, ref.host) })).headSha;
       } catch (err) {
         if (!cached) {
-          setPhase(errorPhase(err, settings));
+          setPhase(errorPhase(err, settings, ref.host));
           return;
         }
       }

@@ -11,8 +11,15 @@ export function parsePrUrl(url: string): PRRef | null {
   return m ? { host: m[1], owner: m[2], repo: m[3], number: +m[4] } : null;
 }
 
+/**
+ * The REST API for a GitHub host: github.com, GitHub Enterprise Cloud with data residency
+ * (`acme.ghe.com` → `api.acme.ghe.com`), or GitHub Enterprise Server (`github.acme.com/api/v3`).
+ */
 export function defaultApiBase(host: string): string {
-  return host === "github.com" ? "https://api.github.com" : `https://${host}/api/v3`;
+  const h = host.toLowerCase();
+  if (h === "github.com") return "https://api.github.com";
+  if (h.endsWith(".ghe.com")) return `https://api.${h}`;
+  return `https://${h}/api/v3`;
 }
 
 /**
