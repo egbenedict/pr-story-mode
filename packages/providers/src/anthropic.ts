@@ -1,9 +1,17 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CompletionRequest, LLMProvider, Usage } from "@prstory/core";
+import { Key, keyedFetch, withKeyRetry, type KeyHeader, type KeySource } from "./auth";
 
 export type AnthropicOptions = {
   model?: string;
-  apiKey?: string; // defaults to ANTHROPIC_API_KEY / an `ant auth login` profile
+  /** A fixed key. With neither this nor `getKey`, the SDK uses ANTHROPIC_API_KEY or an `ant auth login` profile. */
+  apiKey?: string;
+  /** Fetches the key, and fetches it again when the server rejects it (gateway tokens that expire). */
+  getKey?: KeySource;
+  /** How a key is sent. Default `x-api-key`; some gateways want `bearer`. */
+  keyHeader?: KeyHeader;
+  /** Extra headers on every request, for gateways that need them (a team or project id). */
+  headers?: Record<string, string>;
   baseURL?: string; // e.g. an internal gateway
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Calling from a browser extension page with the user's own key (the SDK refuses browsers otherwise). */
@@ -22,14 +30,46 @@ export class AnthropicProvider implements LLMProvider {
   readonly capabilities = { jsonSchema: true, maxContextTokens: 1_000_000, promptCaching: true };
   private client: Anthropic;
   private effort: AnthropicOptions["effort"];
+  private key: Key | null;
 
   constructor(opts: AnthropicOptions = {}) {
     this.model = opts.model ?? DEFAULT_ANTHROPIC_MODEL;
     this.effort = opts.effort ?? "medium";
-    this.client = new Anthropic({ apiKey: opts.apiKey, baseURL: opts.baseURL, dangerouslyAllowBrowser: opts.browser });
+    this.key = opts.getKey ? new Key(opts.getKey, true) : opts.apiKey ? Key.fixed(opts.apiKey) : null;
+    this.client = new Anthropic({
+      baseURL: opts.baseURL,
+      defaultHeaders: opts.headers,
+      dangerouslyAllowBrowser: opts.browser,
+      // With a key of our own, the SDK gets a stand-in (so it looks for no other credentials) and
+      // keyedFetch puts the real key in the right header on each request.
+      ...(this.key ? { apiKey: "set-per-request", fetch: keyedFetch(this.key, opts.keyHeader ?? "x-api-key") } : {}),
+    });
   }
 
-  async complete(req: CompletionRequest): Promise<{ text: string; json?: unknown; usage: Usage }> {
+  /**
+   * A tiny request shaped like a story's (same features), to check the key and gateway work.
+   * Costs well under a cent. Resolves with the model the server says answered.
+   */
+  async ping(): Promise<string> {
+    return withKeyRetry(this.key, async () => {
+      const msg = await this.client.beta.messages.create({
+        model: this.model,
+        max_tokens: 64,
+        betas: ["server-side-fallback-2026-07-01"],
+        fallbacks: "default",
+        thinking: { type: "adaptive" },
+        output_config: { effort: "low" },
+        messages: [{ role: "user", content: "Reply with OK." }],
+      });
+      return msg.model;
+    });
+  }
+
+  complete(req: CompletionRequest): Promise<{ text: string; json?: unknown; usage: Usage }> {
+    return withKeyRetry(this.key, () => this.completeOnce(req));
+  }
+
+  private async completeOnce(req: CompletionRequest): Promise<{ text: string; json?: unknown; usage: Usage }> {
     // The shared prefix (PR description, step order) goes first with a cache breakpoint,
     // so explanation windows after the first reuse it.
     const messages: Anthropic.Beta.BetaMessageParam[] = req.messages.map((m, i) => {

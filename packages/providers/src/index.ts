@@ -4,13 +4,18 @@ import { OpenAICompatibleProvider } from "./openai-compatible";
 
 export { AnthropicProvider, DEFAULT_ANTHROPIC_MODEL } from "./anthropic";
 export { OpenAICompatibleProvider } from "./openai-compatible";
+export { Key, isKeyRejection, keyedFetch, withKeyRetry, type KeyHeader, type KeySource } from "./auth";
+import type { KeyHeader, KeySource } from "./auth";
 export { MockProvider } from "./mock";
 
 export type ProviderConfig =
   | { provider: "none" }
-  | { provider: "anthropic"; model?: string; apiKey?: string; baseURL?: string; effort?: "low" | "medium" | "high" | "xhigh" | "max"; browser?: boolean }
-  | { provider: "openai"; model?: string; apiKey?: string; baseURL?: string }
-  | { provider: "openai-compatible"; model: string; baseURL: string; apiKey?: string; jsonSchema?: boolean; maxContextTokens?: number };
+  | ({ provider: "anthropic"; model?: string; baseURL?: string; effort?: "low" | "medium" | "high" | "xhigh" | "max"; browser?: boolean; keyHeader?: KeyHeader } & Auth)
+  | ({ provider: "openai"; model?: string; baseURL?: string } & Auth)
+  | ({ provider: "openai-compatible"; model: string; baseURL: string; jsonSchema?: boolean; maxContextTokens?: number } & Auth);
+
+/** A fixed key or one fetched as needed, plus any extra headers a gateway wants. */
+type Auth = { apiKey?: string; getKey?: KeySource; headers?: Record<string, string> };
 
 export function createProvider(cfg: ProviderConfig): LLMProvider | null {
   switch (cfg.provider) {
@@ -24,6 +29,8 @@ export function createProvider(cfg: ProviderConfig): LLMProvider | null {
         baseURL: cfg.baseURL ?? "https://api.openai.com/v1",
         model: cfg.model ?? "gpt-5",
         apiKey: cfg.apiKey,
+        getKey: cfg.getKey,
+        headers: cfg.headers,
         jsonSchema: true,
         maxContextTokens: 400_000,
       });

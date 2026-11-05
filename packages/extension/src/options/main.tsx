@@ -160,6 +160,16 @@ function Options() {
               <input type="text" value={s.baseURL} onChange={(e) => set("baseURL", e.target.value)} placeholder={s.provider === "openai-compatible" ? "https://gateway.example.com/v1" : "Leave empty for the public API"} />
               <span className="hint">For a company gateway or a self-hosted server. Saving asks Chrome for permission to reach it.</span>
             </label>
+            {s.provider === "anthropic" && s.baseURL.trim() ? (
+              <label>
+                <span>Send the key as</span>
+                <select value={s.keyHeader} onChange={(e) => set("keyHeader", e.target.value as Settings["keyHeader"])}>
+                  <option value="x-api-key">x-api-key header (most Claude gateways)</option>
+                  <option value="bearer">Authorization: Bearer header</option>
+                </select>
+                <span className="hint">Check your gateway's setup notes: x-api-key matches ANTHROPIC_API_KEY, Bearer matches ANTHROPIC_AUTH_TOKEN.</span>
+              </label>
+            ) : null}
             {s.provider === "anthropic" ? (
               <label>
                 <span>Effort</span>

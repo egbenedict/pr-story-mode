@@ -8,6 +8,8 @@ export type Settings = {
   model: string; // empty: the provider's default
   apiKey: string;
   baseURL: string; // empty: the provider's public API
+  /** How an Anthropic key is sent: x-api-key (the API and most gateways) or Authorization: Bearer. */
+  keyHeader: "x-api-key" | "bearer";
   effort: "" | "low" | "medium" | "high" | "xhigh" | "max";
   githubToken: string; // for github.com
   /** GitHub Enterprise Server or Cloud (`acme.ghe.com`) hosts, each with its own token. */
@@ -18,7 +20,7 @@ export type Settings = {
 
 export type EnterpriseHost = { host: string; token: string };
 
-export const DEFAULT_SETTINGS: Settings = { provider: "anthropic", model: "", apiKey: "", baseURL: "", effort: "", githubToken: "", enterprise: [], appearance: DEFAULT_APPEARANCE };
+export const DEFAULT_SETTINGS: Settings = { provider: "anthropic", model: "", apiKey: "", baseURL: "", keyHeader: "x-api-key", effort: "", githubToken: "", enterprise: [], appearance: DEFAULT_APPEARANCE };
 
 /** "https://GitHub.Acme.com/org/repo" or "github.acme.com" → "github.acme.com"; null when it isn't a host name (or is github.com). */
 export function normalizeHost(input: string): string | null {
@@ -108,7 +110,7 @@ export function providerConfig(s: Settings): ProviderConfig {
   const apiKey = s.apiKey.trim() || undefined;
   switch (s.provider) {
     case "anthropic":
-      return apiKey ? { provider: "anthropic", model, apiKey, baseURL, effort: s.effort || undefined, browser: true } : { provider: "none" };
+      return apiKey ? { provider: "anthropic", model, apiKey, baseURL, keyHeader: s.keyHeader === "bearer" ? "bearer" : "x-api-key", effort: s.effort || undefined, browser: true } : { provider: "none" };
     case "openai":
       return apiKey ? { provider: "openai", model, apiKey, baseURL } : { provider: "none" };
     case "openai-compatible":

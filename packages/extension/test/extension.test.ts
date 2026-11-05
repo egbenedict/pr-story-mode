@@ -19,6 +19,8 @@ describe("settings", () => {
     expect(missingModelReason(DEFAULT_SETTINGS)).toBe("No API key is set.");
     const anthropic = { ...DEFAULT_SETTINGS, apiKey: " test-key " };
     expect(providerConfig(anthropic)).toMatchObject({ provider: "anthropic", apiKey: "test-key", browser: true });
+    expect(providerConfig(anthropic)).toMatchObject({ keyHeader: "x-api-key" });
+    expect(providerConfig({ ...anthropic, keyHeader: "bearer" })).toMatchObject({ keyHeader: "bearer" });
     expect(missingModelReason(anthropic)).toBeNull();
     const selfHosted = { ...DEFAULT_SETTINGS, provider: "openai-compatible" as const, model: "qwen3-coder", baseURL: "http://localhost:8000/v1" };
     expect(providerConfig(selfHosted)).toMatchObject({ provider: "openai-compatible", model: "qwen3-coder", apiKey: undefined });

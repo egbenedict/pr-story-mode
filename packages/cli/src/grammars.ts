@@ -1,9 +1,18 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ParserHost, type GrammarLoader, type QueryLoader } from "@prstory/core";
 
 const require = createRequire(import.meta.url);
+
+/**
+ * The bundled CLI (npm run build:cli) ships the parser files in a `grammars` folder beside it, so
+ * it needs no installed packages. Run from source, they come from node_modules.
+ */
+const here = dirname(fileURLToPath(import.meta.url));
+const BUNDLED = existsSync(join(here, "grammars")) ? join(here, "grammars") : null;
 
 const GRAMMARS: Record<string, string> = {
   typescript: "tree-sitter-typescript/tree-sitter-typescript.wasm",
@@ -23,7 +32,7 @@ export const loadGrammar: GrammarLoader = async (grammar) => {
   const spec = GRAMMARS[grammar];
   if (!spec) return null;
   try {
-    return new Uint8Array(await readFile(require.resolve(spec)));
+    return new Uint8Array(await readFile(BUNDLED ? join(BUNDLED, `${grammar}.wasm`) : require.resolve(spec)));
   } catch {
     return null;
   }
@@ -47,7 +56,12 @@ export const loadQuery: QueryLoader = async (grammar, name) => {
   const out: string[] = [];
   for (const dir of QUERIES[grammar] ?? []) {
     try {
-      const pkg = dirname(require.resolve(`${dir.split("/")[0]}/package.json`));
+      const pkgName = dir.split("/")[0]!;
+      if (BUNDLED) {
+        out.push(await readFile(join(BUNDLED, `${pkgName.replace(/^tree-sitter-/, "")}.${name}.scm`), "utf8"));
+        continue;
+      }
+      const pkg = dirname(require.resolve(`${pkgName}/package.json`));
       out.push(await readFile(join(pkg, dir.split("/").slice(1).join("/"), `${name}.scm`), "utf8"));
     } catch {
       // not shipped
@@ -57,5 +71,6 @@ export const loadQuery: QueryLoader = async (grammar, name) => {
 };
 
 export function createHost(): ParserHost {
-  return new ParserHost(loadGrammar, undefined, loadQuery);
+  const runtime = join(here, "tree-sitter.wasm");
+  return new ParserHost(loadGrammar, BUNDLED && existsSync(runtime) ? { locateFile: () => runtime } : undefined, loadQuery);
 }

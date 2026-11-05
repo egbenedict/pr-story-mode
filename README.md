@@ -25,6 +25,29 @@ Each run writes `stories/<name>/story.html` (the reader) and `story.json` (Story
 
 Without an API key the pipeline still runs end to end. It uses pure dependency order and short template explanations, so you can check atoms, ordering and coverage for free.
 
+## Using the CLI at work
+
+For companies that route models through a gateway, issue short-lived tokens, or don't allow installing packages from the public npm registry:
+
+```bash
+npm run build:cli          # writes packages/cli/dist: one script plus parser files, about 12 MB
+```
+
+Copy `packages/cli/dist` to the work computer (it needs only Node 20 or later, no `npm install`) and put it on the PATH, or run `node pr-story.mjs` inside it. Then:
+
+```bash
+pr-story setup             # where code goes, how to get the key, GitHub hosts and tokens
+pr-story check <PR URL>    # tries the key, the gateway and GitHub, and says where code is sent
+pr-story <PR URL>          # writes the story and opens it
+```
+
+- **Gateways**: `setup` takes the gateway's base URL, whether it wants the key in `x-api-key` or `Authorization: Bearer`, and any extra headers.
+- **Keys that expire**: the key can come from a command that prints it (the last line of its output is used). It runs before each story and again whenever the gateway refuses the key mid-run, so an hourly token never needs pasting. A key can also live in the macOS Keychain (saved by macOS's own prompt, never typed into pr-story) or an environment variable.
+- **GitHub**: each host (github.com, `github.acme.com`, `acme.ghe.com`) gets a token from the GitHub CLI's login (`gh auth token`), a command, Keychain or an environment variable. Read access is enough.
+- **The config file** (`~/.config/pr-story/config.json`, or `$PR_STORY_CONFIG`) holds where to read each secret, never a secret itself, and is readable only by you. A company can hand out one prepared file.
+- **Context from unchanged files** is read through the GitHub API, so no clone is needed; turn it off in `setup` (or with `--no-context`) to send only the changed code to the model.
+- Flags override the saved setup for one run. Without a saved setup, the CLI reads the same environment variables as Claude Code: `ANTHROPIC_API_KEY` (sent as `x-api-key`), `ANTHROPIC_AUTH_TOKEN` (sent as a Bearer token) and `ANTHROPIC_BASE_URL`.
+
 ## Browser extension
 
 ```bash
@@ -50,11 +73,13 @@ To work on the reader without loading the extension, serve `packages/extension/d
 
 | Command | What it does |
 |---|---|
-| `story <pr-url>` / `story --repo --base --head` | Build a story and write the HTML reader |
+| `setup` | Ask where code goes, how to get keys and GitHub tokens, and save the answers |
+| `check [<pr-url>]` | Try the key, gateway and GitHub access, and list where code will be sent |
+| `<pr-url>`, `story <pr-url>` / `story --repo --base --head` | Build a story and write the HTML reader |
 | `atoms --repo --base --head` | Print the change atoms and dependency edges (debugging) |
 | `bench --repo <dir> [--count 20] [--mode merges\|commits]` | Run the pipeline over recent merged PRs and check the coverage guarantee. With a model it records tokens and cost per PR, and stops at the first PR where the model fails (exit code 3), so a billing or auth problem can't produce a run of template text |
 
-Provider options: `--provider anthropic|openai|openai-compatible|none`, `--model`, `--base-url`, `--effort`. Context options: `--repo <clone>` with a PR URL, `--no-context`. The default model is `claude-opus-5-5`. `openai-compatible` covers self-hosted servers such as Ollama and vLLM (`--base-url http://localhost:11434/v1 --model llama3.3`).
+Provider options: `--provider anthropic|openai|openai-compatible|none`, `--model`, `--base-url`, `--effort`. Context options: `--repo <clone>` with a PR URL (otherwise context is read from GitHub), `--no-context`. Also `--open`/`--no-open` and `--config <file>`. The default model is `claude-opus-5-5`. `openai-compatible` covers self-hosted servers such as Ollama and vLLM (`--base-url http://localhost:11434/v1 --model llama3.3`).
 
 ## How it works
 
@@ -97,7 +122,7 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ## Tests and benchmark
 
 ```bash
-npm test            # 93 tests: diff parsing, GitHub ingest, rate-limit errors and review comments, comment formatting, GitHub Enterprise hosts and tokens, model failures, reuse after a push, streaming steps and plan drafts, reading half-written JSON, context from a listed repository and import resolution, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings, appearance
+npm test            # 104 tests: diff parsing, GitHub ingest, rate-limit errors and review comments, comment formatting, GitHub Enterprise hosts and tokens, model failures, reuse after a push, streaming steps and plan drafts, reading half-written JSON, context from a listed repository and import resolution, atomization (TS, Python, C++, Go, JSON), classification, re-indent folding, beats, validation, repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings, appearance, CLI config and key sources, gateway keys that expire
 npm run typecheck
 ```
 
