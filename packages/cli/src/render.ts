@@ -1,4 +1,5 @@
 import {
+  collapsesFor,
   atomLabel,
   atomSnippet,
   contextCaption,
@@ -91,13 +92,25 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
       plain = [];
     };
     const runs = new Map(reindentRuns(rows, FOLD_MIN).map(([a, b, c]) => [a, [b, c]]));
+    // Rows of data and deleted files fold in the story (raw diffs show everything).
+    const folds = new Map(cls === "story" ? collapsesFor(rows, byId.get(atomId)).map((f) => [f.start, f]) : []);
     for (let i = 0; i < rows.length; i++) {
+      const f = folds.get(i);
+      if (f) {
+        flush();
+        parts.push(
+          `<tbody class="fold-toggle"><tr><td colspan="3"><button type="button" class="fold-btn ${f.kind}" aria-expanded="false">${f.kind === "deleted" ? "" : "⋯ "}${inline(f.label)} · <span class="fold-state">show</span></button></td></tr></tbody>`,
+          `<tbody class="fold-body">${rows.slice(f.start, f.end + 1).map(row).join("")}</tbody>`,
+        );
+        i = f.end;
+        continue;
+      }
       const run = runs.get(i);
       if (run) {
         const [end, n] = run;
         flush();
         parts.push(
-          `<tbody class="fold-toggle"><tr><td colspan="3"><button type="button" class="fold-btn" aria-expanded="false">~ ${n} lines re-indented, otherwise unchanged · show</button></td></tr></tbody>`,
+          `<tbody class="fold-toggle"><tr><td colspan="3"><button type="button" class="fold-btn" aria-expanded="false">~ ${n} lines re-indented, otherwise unchanged · <span class="fold-state">show</span></button></td></tr></tbody>`,
           `<tbody class="fold-body">${rows.slice(i, end + 1).map(row).join("")}</tbody>`,
         );
         i = end;
@@ -297,7 +310,7 @@ ${mechanical}
     const body = btn.closest('tbody').nextElementSibling;
     body.classList.toggle('open', open);
     btn.setAttribute('aria-expanded', open);
-    btn.textContent = btn.textContent.replace(/· (show|hide)$/, '· ' + (open ? 'hide' : 'show'));
+    btn.querySelector('.fold-state').textContent = open ? 'hide' : 'show';
   };
   for (const btn of document.querySelectorAll('.fold-btn')) btn.addEventListener('click', () => setFold(btn, btn.getAttribute('aria-expanded') !== 'true'));
 

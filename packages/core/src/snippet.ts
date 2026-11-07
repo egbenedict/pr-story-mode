@@ -1,3 +1,4 @@
+import type { Collapse } from "./collapse";
 import type { ChangeAtom, Citation, PRFile, StoryStep } from "./types";
 
 /**
@@ -149,11 +150,13 @@ export function reindentRuns(rows: SnippetRow[], min = 4): [number, number, numb
 
 /**
  * Plain-text rendering used in prompts: `  12 + code`, `  10 - code`, `  14 ~ code` (re-indented),
- * with head numbers for context. Long re-indented runs are shortened to their first and last line.
+ * with head numbers for context. Long re-indented runs are shortened to their first and last line,
+ * and `folds` (see collapse.ts) to one line saying what was left out.
  */
-export function snippetText(rows: SnippetRow[], maxRows = Infinity): string {
+export function snippetText(rows: SnippetRow[], maxRows = Infinity, folds: Collapse[] = []): string {
   const out: string[] = [];
   const runs = new Map(reindentRuns(rows, 6).map(([a, b, c]) => [a, [b, c]]));
+  const folded = new Map(folds.map((f) => [f.start, f]));
   let n = 0;
   for (let k = 0; k < rows.length; k++) {
     const r = rows[k];
@@ -162,6 +165,13 @@ export function snippetText(rows: SnippetRow[], maxRows = Infinity): string {
       break;
     }
     n++;
+    // Folded runs (rows of data, the rest of a deleted file) are one line saying what's left out.
+    const f = folded.get(k);
+    if (f) {
+      out.push(`        … ${f.label}, not shown`);
+      k = f.end;
+      continue;
+    }
     if (r.type === "gap") {
       out.push("  …");
       continue;

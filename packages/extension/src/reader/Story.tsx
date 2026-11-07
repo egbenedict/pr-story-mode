@@ -1,6 +1,7 @@
 import {
   atomLabel,
   atomSnippet,
+  collapsesFor,
   contextCaption,
   expandChunk,
   fileRows,
@@ -189,7 +190,29 @@ function useRowHasComments(path: string | undefined) {
   };
 }
 
-function Fold({ rows, n, isHl, path, clsOf, ask }: { rows: SnippetRow[]; n: number; isHl: (r: SnippetRow) => boolean; path?: string; clsOf: (r: SnippetRow) => string | undefined; ask?: { step: number; atomId: string } }) {
+/**
+ * Rows hidden behind a one-line summary until opened: re-indented runs, runs of similar lines (rows
+ * of data) and deleted files. Opens by itself when a citation or a comment points inside.
+ */
+function Fold({
+  rows,
+  n,
+  isHl,
+  path,
+  clsOf,
+  ask,
+  label,
+  kind = "reindent",
+}: {
+  rows: SnippetRow[];
+  n: number;
+  isHl: (r: SnippetRow) => boolean;
+  path?: string;
+  clsOf: (r: SnippetRow) => string | undefined;
+  ask?: { step: number; atomId: string };
+  label?: string;
+  kind?: "reindent" | "similar" | "deleted";
+}) {
   const hasComments = useRowHasComments(path);
   const hit = rows.some(isHl) || rows.some(hasComments);
   const [open, setOpen] = useState(false);
@@ -201,8 +224,8 @@ function Fold({ rows, n, isHl, path, clsOf, ask }: { rows: SnippetRow[]; n: numb
       <tbody className="fold-toggle">
         <tr>
           <td colSpan={3}>
-            <button type="button" className="fold-btn" aria-expanded={open} onClick={() => setOpen(!open)}>
-              ~ {n} lines re-indented, otherwise unchanged · {open ? "hide" : "show"}
+            <button type="button" className={`fold-btn ${kind}`} aria-expanded={open} onClick={() => setOpen(!open)}>
+              {kind === "reindent" ? `~ ${n} lines re-indented, otherwise unchanged` : <>{kind === "deleted" ? "" : "⋯ "}<Inline text={label ?? `${n} lines`} /></>} · {open ? "hide" : "show"}
             </button>
           </td>
         </tr>
@@ -233,6 +256,9 @@ function DiffTable({ atomId, rows, cls, step, extra, top, bottom, gapControl }: 
   // The story's chunks can be asked about; raw diffs can't (they're for checking against GitHub).
   const ask = cls === "story" ? { step, atomId } : undefined;
   const runs = useMemo(() => new Map(reindentRuns(rows, FOLD_MIN).map(([a, b, c]) => [a, [b, c] as const])), [rows]);
+  // Rows of data and deleted files fold too, in the story (raw diffs show everything, as GitHub does).
+  const atom = byId.get(atomId);
+  const folds = useMemo(() => (cls === "story" ? new Map(collapsesFor(rows, atom).map((f) => [f.start, f])) : new Map()), [rows, atom, cls]);
   const parts: ReactNode[] = [];
   let plain: SnippetRow[] = [];
   const flush = (key: string) => {
@@ -247,6 +273,13 @@ function DiffTable({ atomId, rows, cls, step, extra, top, bottom, gapControl }: 
     plain = [];
   };
   for (let i = 0; i < rows.length; i++) {
+    const f = folds.get(i);
+    if (f) {
+      flush(`p${i}`);
+      parts.push(<Fold key={`c${i}`} rows={rows.slice(f.start, f.end + 1)} n={f.count} isHl={isHl} path={path} clsOf={clsOf} ask={ask} label={f.label} kind={f.kind} />);
+      i = f.end;
+      continue;
+    }
     const run = runs.get(i);
     if (run) {
       const [end, n] = run;

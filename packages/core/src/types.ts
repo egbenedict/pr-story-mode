@@ -62,6 +62,8 @@ export type ChangeAtom = {
   defines: string[]; // symbols defined or changed
   references: string[]; // symbols used
   supportTier: 0 | 1 | 2;
+  /** The whole file was deleted: one atom for all of it, shown folded under a summary of the top-level names it held. */
+  deletedFile?: { names: string[] };
 };
 
 /**

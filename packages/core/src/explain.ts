@@ -2,6 +2,7 @@ import { addUsage, completeJson, estimateTokens, prHeader } from "./llm";
 import { fallbackLabel } from "./order";
 import { partialStrings, streamedArray, throttle } from "./partial-json";
 import { atomLabel, atomSnippet, lineCounts, rowNumber, snippetText, type SnippetRow } from "./snippet";
+import { promptCollapses } from "./collapse";
 import type { Beat, ChangeAtom, Citation, ContextSnippet, JSONSchema, LLMProvider, PRInput, StoryStep } from "./types";
 import type { Plan } from "./validate";
 
@@ -140,7 +141,10 @@ export async function explainSteps(
     const parts = s.atomIds.map((id) => {
       const a = byId.get(id)!;
       const { add, del } = lineCounts(a);
-      return `Atom ${id}: ${atomLabel(a)} (${a.kind}, +${add} −${del})\n\`\`\`\n${snippetText(snippets.get(id)!)}\n\`\`\``;
+      const rows = snippets.get(id)!;
+      const names = a.deletedFile?.names ?? [];
+      const what = a.deletedFile ? `the whole file is deleted${names.length ? `; it defined ${names.slice(0, 12).join(", ")}` : ""}` : a.kind;
+      return `Atom ${id}: ${atomLabel(a)} (${what}, +${add} −${del})\n\`\`\`\n${snippetText(rows, Infinity, promptCollapses(rows, a))}\n\`\`\``;
     });
     const ctx = ctxLabels.filter((c) => c.step === i).map(({ label, snip }) => `${label}: ${contextCaption(snip)}, \`${snip.file}\` lines ${snip.start}–${snip.end} (unchanged)\n\`\`\`\n${numbered(snip)}\n\`\`\``);
     return `## Step ${i + 1}: ${s.label}${s.orderOverride ? `\n(Placed before its dependencies on purpose: ${s.orderOverride})` : ""}\n\n${parts.join("\n\n")}${ctx.length ? `\n\nUnchanged context for this step:\n\n${ctx.join("\n\n")}` : ""}`;

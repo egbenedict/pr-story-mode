@@ -92,6 +92,9 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .diff tbody.fold-body.open { display: table-row-group; }
 .fold-btn { all: unset; cursor: pointer; display: block; width: 100%; padding: 2px 10px; font: 11.5px var(--sans); color: var(--muted); background: var(--ctx-bg); }
 .fold-btn:hover { color: var(--accent); }
+.fold-btn code { font-size: 0.95em; background: none; padding: 0; }
+.fold-btn.deleted { padding: 6px 12px; font-size: 12.5px; color: var(--del-ink); background: var(--del-bg); }
+.fold-btn.deleted:hover { color: var(--del-ink); text-decoration: underline; }
 .diff tbody.expand td { background: var(--ctx-bg); padding: 1px 10px; }
 .expand-btn { all: unset; cursor: pointer; padding: 1px 4px; border-radius: 4px; font: 11.5px var(--sans); color: var(--muted); }
 .expand-btn:hover, .expand-btn:focus-visible { color: var(--accent); }

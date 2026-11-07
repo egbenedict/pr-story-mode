@@ -322,3 +322,38 @@ describe("streaming", () => {
     expect(step2Drafts.at(-1)!.text).toContain("Step 2 starts here.");
   });
 });
+
+describe("folding low-information changes", () => {
+  const legacy = [
+    "export interface LegacyConfig {",
+    "  path: string;",
+    "}",
+    "",
+    "export function parseLegacy(text: string): LegacyConfig {",
+    "  return { path: text.trim() };",
+    "}",
+    "",
+    "export function migrate(c: LegacyConfig): string {",
+    "  return c.path.toUpperCase();",
+    "}",
+    "",
+  ].join("\n");
+  const table = `export const WEIGHTS = [\n${Array.from({ length: 60 }, (_, i) => `  [${i}, ${(i * 0.37).toFixed(2)}, ${i % 7}],`).join("\n")}\n];\n`;
+  const pr = makePR(
+    { "src/legacy.ts": legacy, "src/app.ts": "export const run = () => 1;\n" },
+    { "src/legacy.ts": null, "src/weights.ts": table, "src/app.ts": "import { WEIGHTS } from './weights';\nexport const run = () => WEIGHTS.length;\n" },
+    { title: "Drop the legacy parser, add weights" },
+  );
+
+  it("makes a deleted file one change, folds data, and still shows every line exactly once", async () => {
+    const r = await runPipeline(pr, { host: createHost(), provider: null });
+    const deleted = r.atoms.filter((a) => a.file === "src/legacy.ts");
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]).toMatchObject({ deletedFile: { names: ["LegacyConfig", "parseLegacy", "migrate"] }, kind: "removed" });
+    expect(r.coverage.ok).toBe(true);
+    const html = renderStoryHtml(pr, r);
+    expect(html).toContain('class="fold-btn deleted"');
+    expect(html).toContain("Deleted file · 11 lines · removed <code>LegacyConfig</code>, <code>parseLegacy</code>, <code>migrate</code> · ");
+    expect(html).toMatch(/56 more similar lines of numbers · <span class="fold-state">show/);
+  });
+});

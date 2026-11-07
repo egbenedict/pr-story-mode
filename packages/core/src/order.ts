@@ -2,6 +2,7 @@ import { partialStrings, streamedArray, throttle } from "./partial-json";
 import { dependencyOrder, type Edge } from "./graph";
 import { addUsage, completeJson, estimateTokens, prHeader } from "./llm";
 import { atomLabel, atomSnippet, lineCounts, snippetText } from "./snippet";
+import { promptCollapses } from "./collapse";
 import type { ChangeAtom, JSONSchema, LLMProvider, Msg, PRInput } from "./types";
 import { validatePlan, type Plan } from "./validate";
 
@@ -100,11 +101,12 @@ export function orderPrompt(pr: PRInput, atoms: ChangeAtom[], edges: Edge[], bud
     atoms
       .map((a) => {
         const { add, del } = lineCounts(a);
-        const tags = [a.kind, `+${add} −${del}`, a.mechanical ? `mechanical: ${a.mechanical}` : null].filter(Boolean).join(", ");
+        const tags = [a.deletedFile ? "whole file deleted" : a.kind, `+${add} −${del}`, a.mechanical ? `mechanical: ${a.mechanical}` : null].filter(Boolean).join(", ");
         const head = `### ${a.id}: ${atomLabel(a)} (${tags})`;
         if (a.mechanical || maxRows === 0) return head;
         if (summaries) return `${head}\n${summaries.get(a.id) ?? fallbackLabel(a)}`;
-        return `${head}\n\`\`\`\n${snippetText(atomSnippet(files.get(a.file), a, 1), maxRows)}\n\`\`\``;
+        const rows = atomSnippet(files.get(a.file), a, 1);
+        return `${head}\n\`\`\`\n${snippetText(rows, maxRows, promptCollapses(rows, a))}\n\`\`\``;
       })
       .join("\n\n");
 
@@ -205,7 +207,8 @@ export async function summarizeAtoms(
   for (const a of atoms) {
     if (a.mechanical) continue;
     const { add, del } = lineCounts(a);
-    let text = `### ${a.id}: ${atomLabel(a)} (${a.kind}, +${add} −${del})\n\`\`\`\n${snippetText(atomSnippet(files.get(a.file), a, 1), 80)}\n\`\`\``;
+    const rows = atomSnippet(files.get(a.file), a, 1);
+    let text = `### ${a.id}: ${atomLabel(a)} (${a.deletedFile ? "whole file deleted" : a.kind}, +${add} −${del})\n\`\`\`\n${snippetText(rows, 80, promptCollapses(rows, a))}\n\`\`\``;
     if (estimateTokens(text) > perBatch) text = text.slice(0, perBatch * 4) + "\n…\n\`\`\`";
     const cost = estimateTokens(text);
     let b = batches[batches.length - 1];

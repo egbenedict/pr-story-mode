@@ -39,7 +39,10 @@ export const STOP_NAMES = new Set([
 
 export async function atomizePR(pr: PRInput, host: ParserHost): Promise<ChangeAtom[]> {
   const atoms: ChangeAtom[] = [];
-  for (const file of pr.files) atoms.push(...(await atomizeFile(file, pr.headSha, host)));
+  for (const file of pr.files) {
+    const parts = await atomizeFile(file, pr.headSha, host);
+    atoms.push(...(file.status === "removed" ? deletedFileAtoms(file, parts, pr.headSha) : parts));
+  }
   // Make IDs unique even in the unlikely event of a hash collision.
   const seen = new Map<string, number>();
   for (const a of atoms) {
@@ -48,6 +51,32 @@ export async function atomizePR(pr: PRInput, host: ParserHost): Promise<ChangeAt
     if (n > 0) a.id = `${a.id}_${n}`;
   }
   return atoms;
+}
+
+/**
+ * A deleted file is one change, not one per function it held: there is nothing to pair its lines
+ * with, and the reader shows it folded under a summary of what it defined. Mechanical files
+ * (generated, lockfiles, binaries) stay as they are.
+ */
+function deletedFileAtoms(file: PRFile, parts: ChangeAtom[], headSha: string): ChangeAtom[] {
+  const code = parts.filter((a) => !a.mechanical);
+  if (!code.length) return parts;
+  const defines = [...new Set(code.flatMap((a) => a.defines))];
+  const own = new Set(defines);
+  const merged: ChangeAtom = {
+    id: stableId(file.path, "<deleted>", headSha),
+    file: file.path,
+    language: code[0]!.language,
+    symbolPath: [],
+    kind: "removed",
+    hunkLines: code.flatMap((a) => a.hunkLines).sort((x, y) => x.line - y.line),
+    defines,
+    references: [...new Set(code.flatMap((a) => a.references))].filter((r) => !own.has(r)),
+    supportTier: Math.max(...code.map((a) => a.supportTier)) as 0 | 1 | 2,
+    // What the file held at the top level (functions, classes, types), for its summary.
+    deletedFile: { names: [...new Set(code.filter((a) => a.symbolPath.length === 1 && /^[A-Za-z_$][\w$]*$/.test(a.symbolPath[0]!)).map((a) => a.symbolPath[0]!))] },
+  };
+  return [...parts.filter((a) => a.mechanical), merged];
 }
 
 export async function atomizeFile(file: PRFile, headSha: string, host: ParserHost): Promise<ChangeAtom[]> {
