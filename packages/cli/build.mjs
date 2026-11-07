@@ -1,10 +1,27 @@
 // Bundles the CLI into dist/: one script plus the parser files, so it runs with just Node (20 or
 // later) and needs no `npm install` on the computer that uses it. Copy the folder anywhere.
-import { build } from "esbuild";
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+const major = Number(process.versions.node.split(".")[0]);
+if (major < 20) {
+  console.error(`The CLI needs Node 20 or later to build and run; this is Node ${process.versions.node}.`);
+  process.exit(1);
+}
+
+// The build needs the repository's packages (esbuild, tree-sitter). Say so plainly when they're missing.
+let build;
+try {
+  ({ build } = await import("esbuild"));
+} catch {
+  console.error(
+    "The build tools aren't installed. Run `npm install` in the repository folder first, then `npm run build:cli` again.\n" +
+      "If this computer can't install packages from npm (a work laptop, say), build on one that can and copy packages/cli/dist over: the built folder needs only Node.",
+  );
+  process.exit(1);
+}
 
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "dist");

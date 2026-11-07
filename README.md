@@ -30,6 +30,7 @@ Without an API key the pipeline still runs end to end. It uses pure dependency o
 For companies that route models through a gateway, issue short-lived tokens, or don't allow installing packages from the public npm registry:
 
 ```bash
+npm install                # once, on a computer that can install from npm
 npm run build:cli          # writes packages/cli/dist: one script plus parser files, about 12 MB
 ```
 

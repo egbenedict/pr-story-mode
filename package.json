@@ -12,6 +12,7 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "story": "tsx packages/cli/src/main.ts",
+    "build": "npm run build:extension && npm run build:cli",
     "build:extension": "npm run build -w @prstory/extension",
     "build:cli": "npm run build -w @prstory/cli"
   },
