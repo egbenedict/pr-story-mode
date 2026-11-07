@@ -122,3 +122,15 @@ describe("definition excerpts", () => {
     expect(defs[0]).toMatchObject({ name: "getState", start: 1, end: 8 });
   });
 });
+
+import { commentLines } from "../src";
+
+describe("comment lines", () => {
+  it("finds block comments with and without leading stars, docstrings and line comments", () => {
+    const ts = ["/**", "Plain doc text,", "\tno stars here.", "*/", "const a = 1; // trailing", "// only a comment", "const b = 2;"].join("\n");
+    expect([...commentLines(ts)]).toEqual([1, 2, 3, 4, 6]);
+    const py = ['def f():', '    """Doc', '    more."""', '    return 1  # trailing', '    # only'].join("\n");
+    expect([...commentLines(py)]).toEqual([2, 3, 5]);
+    expect([...commentLines("#include <x.h>\n#define N 1\n# a comment")]).toEqual([3]);
+  });
+});

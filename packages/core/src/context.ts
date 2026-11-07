@@ -78,6 +78,45 @@ export function familyOf(pack: LanguagePack): string {
 const identLike = /^[\w$.#:~]+$/;
 /** `Class.method` → `method` (qualified names come from `this.method()` calls). */
 const bareName = (s: string) => s.slice(s.lastIndexOf(".") + 1);
+
+/**
+ * Line numbers (1-based) of a file that are inside comments: `/* … *\/` blocks (with or without a
+ * leading `*` on each line), Python docstrings, and lines that are only a comment. Rough, for any language.
+ */
+export function commentLines(text: string): Set<number> {
+  const out = new Set<number>();
+  let block: "c" | "py" | null = null;
+  text.split("\n").forEach((line, i) => {
+    const n = i + 1;
+    if (block === "c") {
+      out.add(n);
+      if (line.includes("*/")) block = null;
+      return;
+    }
+    if (block === "py") {
+      out.add(n);
+      if (/"""|'''/.test(line)) block = null;
+      return;
+    }
+    const t = line.trim();
+    if (t.startsWith("/*")) {
+      out.add(n);
+      if (!t.slice(2).includes("*/")) block = "c";
+      return;
+    }
+    const doc = /^("""|''')/.exec(t);
+    if (doc) {
+      out.add(n);
+      if ((t.match(/"""|'''/g) ?? []).length === 1) block = "py";
+      return;
+    }
+    if (COMMENT_LINE.test(line)) out.add(n);
+  });
+  return out;
+}
+
+/** A blank line or a comment line (`//`, `/*`, `*`, `#`, `--`, docstring quotes), roughly, across languages. */
+const COMMENT_LINE = /^\s*($|\/\/|\/\*|\*|#(?!\s*(include|define|if|ifdef|ifndef|else|elif|endif|pragma|import)\b)|--|"""|''')/;
 const bare = (name: string) => (identLike.test(name) ? name.replace(/^.*(\.|::)/, "") : "");
 
 /**
@@ -110,9 +149,36 @@ export async function retrieveContext(
   const stepAtoms = steps.map((s) =>
     s.atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a && !a.mechanical && !a.symbolPath.includes("<imports>")),
   );
+  // Text of each step's changed lines. Context is about what changed: a name used only in the
+  // unchanged lines around a change (elsewhere in the same function) gets no definition shown.
+  const files0 = new Map(pr.files.map((f) => [f.path, f]));
+  // Which lines of each file version are comments, worked out once per file when needed.
+  const commentCache = new Map<string, Set<number>>();
+  const commentsOf = (key: string, text: string | undefined) => {
+    if (!commentCache.has(key)) commentCache.set(key, commentLines(text ?? ""));
+    return commentCache.get(key)!;
+  };
+  const changedLines = stepAtoms.map((as) => {
+    const parts: { text: string; comment: boolean }[] = [];
+    for (const a of as) {
+      const f = files0.get(a.file);
+      const mine = new Set(a.hunkLines.map((r) => `${r.side}${r.line}`));
+      for (const h of f?.hunks ?? [])
+        for (const l of h.lines) {
+          if (l.type === "add" && mine.has(`RIGHT${l.newLine}`)) parts.push({ text: l.text, comment: commentsOf(`head:${a.file}`, f?.headText).has(l.newLine) || COMMENT_LINE.test(l.text) });
+          else if (l.type === "del" && mine.has(`LEFT${l.oldLine}`)) parts.push({ text: l.text, comment: commentsOf(`base:${a.file}`, f?.baseText).has(l.oldLine) || COMMENT_LINE.test(l.text) });
+        }
+    }
+    return parts;
+  });
+  const changedText = changedLines.map((ls) => ls.map((l) => l.text).join("\n"));
+  const uses = (text: string, sym: string) => text.split(new RegExp(`(?<![\\w$])${sym.replace(/\$/g, "\\$")}(?![\\w$])`)).length - 1;
+  // A change that only touches comments (or blank lines) needs no code beside it.
+  const commentOnly = changedLines.map((ls) => ls.length > 0 && ls.every((l) => l.comment));
+
   // Member-only references (`.b`, from `a.b` reads) are too ambiguous to look up as context.
   const useful = (s: string) => s.length > 2 && !s.startsWith(".") && !STOP_NAMES.has(s) && !definedInPR.has(s);
-  const stepRefs = stepAtoms.map((as) => [...new Set(as.flatMap((a) => a.references))].filter(useful));
+  const stepRefs = stepAtoms.map((as, i) => [...new Set(as.flatMap((a) => a.references))].filter((r) => useful(r) && uses(changedText[i], bareName(r)) > 0));
   const modifiedDefs = stepAtoms.map((as) =>
     as.filter((a) => a.kind !== "added").flatMap((a) => a.defines).filter((d) => d.length > 2 && !STOP_NAMES.has(d)),
   );
@@ -158,26 +224,15 @@ export async function retrieveContext(
       if (u.kind !== "class") leaves.push(u);
     }
 
-  // Text of each step's changed lines: symbols used there matter more than ones only in context.
-  const files0 = new Map(pr.files.map((f) => [f.path, f]));
-  const changedText = stepAtoms.map((as) => {
-    const parts: string[] = [];
-    for (const a of as) {
-      const mine = new Set(a.hunkLines.map((r) => `${r.side}${r.line}`));
-      for (const h of files0.get(a.file)?.hunks ?? [])
-        for (const l of h.lines)
-          if ((l.type === "add" && mine.has(`RIGHT${l.newLine}`)) || (l.type === "del" && mine.has(`LEFT${l.oldLine}`))) parts.push(l.text);
-    }
-    return parts.join("\n");
-  });
-  const uses = (text: string, sym: string) => text.split(new RegExp(`(?<![\\w$])${sym.replace(/\$/g, "\\$")}(?![\\w$])`)).length - 1;
-
   // 4. Rank candidates per step.
   const shown: { file: string; start: number; end: number }[] = [];
   const overlapsShown = (file: string, start: number, end: number) => shown.some((r) => r.file === file && r.start <= end && start <= r.end);
 
   const context = stepAtoms.map((as, i) => {
-    if (!as.length) return [];
+    if (!as.length || commentOnly[i]) return [];
+    // A small change gets less beside it: the line budget grows with the lines changed.
+    const stepMax = maxSnippets;
+    const stepLines = Math.min(maxLines, 24 + 3 * changedLines[i].length);
     const files = new Set(as.map((a) => a.file));
     const dirs = new Set(as.map((a) => dirOf(a.file)));
     const family = familyOf(packForPath(as[0].file) ?? ({ id: "" } as LanguagePack));
@@ -204,13 +259,15 @@ export async function retrieveContext(
       // A definition outside the PR's files counts only when it is the only one.
       const best = [...defs].sort((a, b) => near(b.file) - near(a.file) || a.end - a.start - (b.end - b.start))[0];
       if (!index.get(best.file)!.inPR && defs.length > 1) continue;
+      // A test step is about the code under test, which the PR changes, not general helpers it uses.
+      if (stepIsTest && !index.get(best.file)!.inPR) continue;
       const [start, end] = definitionRange(best);
       const n = uses(changedText[i], name);
       candidates.push({ score: 20 + (n ? 10 + Math.min(n, 5) : 0) + 3 * near(best.file), snip: snippet(index, best.file, start, end, "definition", r) });
     }
 
-    // Existing callers of what the step modifies.
-    for (const d of new Set(modifiedDefs[i])) {
+    // Existing callers of what the step modifies (other tests calling a changed test helper don't help).
+    for (const d of stepIsTest ? [] : new Set(modifiedDefs[i])) {
       // A declaration of the same function (a C prototype in a header) is not a caller.
       const declares = (u: Unit) => definedOnLine(index.get(u.file)!.lines[u.start - 1] ?? "").includes(bareName(d));
       const callers = leaves.filter((u) => u.family === family && u.name !== d && (stepIsTest || !isTestPath(u.file)) && refsOf(u).has(d) && !declares(u));
@@ -253,9 +310,9 @@ export async function retrieveContext(
     const picked: ContextSnippet[] = [];
     let lines = 0;
     for (const { snip } of candidates) {
-      if (picked.length >= maxSnippets) break;
+      if (picked.length >= stepMax) break;
       const n = snip.end - snip.start + 1;
-      if (lines + n > maxLines) continue;
+      if (lines + n > stepLines) continue;
       if (overlapsShown(snip.file, snip.start, snip.end)) continue;
       if (as.some((a) => a.file === snip.file && a.headRange && a.headRange.start <= snip.end && snip.start <= a.headRange.end)) continue;
       picked.push(snip);

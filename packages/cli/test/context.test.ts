@@ -207,3 +207,34 @@ describe("context in stories", () => {
     expect(r.story.steps.every((s) => !s.context)).toBe(true);
   });
 });
+
+// Context is about what changed: `run` uses `unrelated` on a line that didn't change and `fmt` on
+// one that did; `describeRun` changes only its comment; the test calls `delay`, a helper outside the PR.
+describe("context stays on what changed", () => {
+  const r2 = makeRepo(
+    {
+      "src/util.ts": `export function fmt(x: number): string {\n  return x.toFixed(2);\n}\n\nexport function unrelated(): void {\n  console.log("hi");\n}\n`,
+      "src/delay.ts": `export function delay(ms: number) {\n  return new Promise((r) => setTimeout(r, ms));\n}\n`,
+      "src/app.ts": `import { fmt, unrelated } from "./util";\n\nexport function run(a: number) {\n  unrelated();\n  const b = a + 1;\n  return b;\n}\n\nexport function describeRun() {\n  // Runs once.\n  return "run";\n}\n`,
+      "test/app.test.ts": `import { delay } from "../src/delay";\nimport { run } from "../src/app";\n\ntest("run", async () => {\n  expect(run(1)).toBe(2);\n});\n`,
+    },
+    {
+      "src/app.ts": `import { fmt, unrelated } from "./util";\n\nexport function run(a: number) {\n  unrelated();\n  const b = fmt(a + 1);\n  return b;\n}\n\nexport function describeRun() {\n  // Runs once, then stops.\n  return "run";\n}\n`,
+      "test/app.test.ts": `import { delay } from "../src/delay";\nimport { run } from "../src/app";\n\ntest("run", async () => {\n  await delay(5);\n  expect(run(1)).toBe("2.00");\n});\n`,
+    },
+    { title: "Format run's result" },
+  );
+  afterAll(() => r2.cleanup());
+
+  it("shows definitions only for names on changed lines, nothing for comment-only changes, and no outside helpers for tests", async () => {
+    const atoms = classifyAtoms(r2.pr, await atomizePR(r2.pr, host));
+    const steps = atoms.filter((a) => !a.mechanical && !a.symbolPath.includes("<imports>")).map((a) => ({ atomIds: [a.id] }));
+    const { context } = await retrieveContext(r2.pr, atoms, steps, host, { source: localContextSource(r2.dir, r2.pr.headSha) });
+    const ctxOf = (sym: string) => context[steps.findIndex((s) => atoms.find((a) => a.id === s.atomIds[0])!.symbolPath.join(".").includes(sym))] ?? [];
+    expect(ctxOf("run").map((c) => c.symbol)).toContain("fmt");
+    expect(ctxOf("run").map((c) => c.symbol)).not.toContain("unrelated");
+    expect(ctxOf("describeRun")).toEqual([]);
+    const testStep = context[steps.findIndex((s) => isTestPath(atoms.find((a) => a.id === s.atomIds[0])!.file))] ?? [];
+    expect(testStep.map((c) => c.symbol)).not.toContain("delay");
+  });
+});
