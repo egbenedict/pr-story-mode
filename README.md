@@ -2,7 +2,7 @@
 
 Turns a pull request into a near-linear, narrated story. The diff is broken into small **change atoms** (one function, method, class member, config key or import list each), ordered so concepts come before their uses, and explained step by step.
 
-This repo implements the [technical design](https://claude.ai/artifact/8sYLrCQsfX4pGtwiwS4FvP) as a CLI and a Chrome extension. **Phase 1** (ingest and parse, atoms, plan and validate, HTML output) is done. **Phase 2** (story quality) is nearly done: the symbol graph, unchanged context beside each step, staged ordering for large PRs, linked issues and the grounding check are in; the benchmark has not yet run with a model. **Phase 3** (the extension) is under way: the reader, streaming, settings, caching, review comments, reuse after new pushes and context from unchanged files on GitHub work; GitHub Enterprise hosts, appearance settings and asking about selected code work; more providers and enterprise policy settings are next.
+This repo implements the [technical design](https://claude.ai/artifact/8sYLrCQsfX4pGtwiwS4FvP) as a CLI and a Chrome extension. **Phase 1** (ingest and parse, atoms, plan and validate, HTML output) is done. **Phase 2** (story quality) is done: the symbol graph, unchanged context beside each step, staged ordering for large PRs, linked issues and the grounding check are in; the 60-PR benchmark with Opus 5.5 is done (below). **Phase 3** (the extension) is under way: the reader, streaming, settings, caching, review comments, reuse after new pushes and context from unchanged files on GitHub work; GitHub Enterprise hosts, appearance settings and asking about selected code work; more providers and enterprise policy settings are next.
 
 ## Quick start
 
@@ -139,8 +139,17 @@ Phase 1 gate ("coverage holds on 20 real PRs"), run without an LLM:
 
 With context retrieval from the local clone (still no LLM), coverage holds on all 60. Edges: Flask 235, ky 235, luau 258. Unchanged snippets: Flask 143 across 376 steps, ky 401 across 468, luau 190 across 222. Average time per PR: 0.4 s, 0.9 s and 2.6 s.
 
+Phase 2 benchmark, the same 60 PRs with Opus 5.5 (November 2026, $10.53 in all):
+
+| Repo | PRs | Coverage | Steps | Cost | Repair rounds | Fallbacks | Citations dropped (worst PR) | First step, median | Whole story, median |
+|---|---|---|---|---|---|---|---|---|---|
+| Flask | 20 | 20/20 | 171 | $3.24 | 3 | 0 | 1.9% | 15.5 s | 28.4 s |
+| ky | 20 | 20/20 | 258 | $4.91 | 4 | 0 | 3.8% | 14.8 s | 45.5 s |
+| luau | 20 | 20/20 | 102 | $2.38 | 8 | 0 | 10.0% | 16.4 s | 25.8 s |
+
+No model call failed, no step went without an explanation, no plan broke dependency order without saying why, and one beat cut point had to be moved. On average 0.46% of citations were dropped by the grounding check. No PR was large enough to need staged ordering. The most expensive PR cost $1.11 (ky, 1,576 lines). On the 15 PRs also in the pilot, the code sent to the model shrank after context was tightened (ky: 384k to 338k input tokens, 169 to 94 context snippets). This measures the pipeline's mechanics, not how good the explanations read; that needs people reading the stories.
+
 ## Not done yet
 
-- Phase 2: the full 60-PR benchmark with a model. A 15-PR pilot on Opus 5.5 (5 each from Flask, ky and luau) cost $3.75: coverage held on all 15, no fallbacks or failed calls, 2 repair rounds, at most 5.4% of citations dropped by the grounding check, a median of 29 s to the first explained step. The full run should cost about $15.
 - Phase 3: Bedrock, Vertex and Azure adapters; enterprise policy settings (managed storage). GitHub Enterprise support hasn't been tried on a real server yet. Review comments have been checked against a fake GitHub API, not yet on a real pull request. Reuse after a push is tested with a scripted model, not yet with a real one.
 - The 200 to 500 PR benchmark, model comparison and reviewer study (Phase 4).
