@@ -19,7 +19,8 @@ import {
   type StoryStep,
   type WalkChunk,
 } from "@prstory/core";
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { AskProvider, AskRows, type AskOptions } from "./ask";
 import { CommentButton, LineComments, useComments } from "./comments";
 
 /** What the reader shows; `steps[i]` is undefined until step i has been written. */
@@ -121,7 +122,8 @@ function inRange(r: SnippetRow, from: number, to: number): boolean {
   return (n != null && n >= from && n <= to) || (o != null && o >= from && o <= to);
 }
 
-function Row({ r, hl, path, cls, gap }: { r: SnippetRow; hl: boolean; path?: string; cls?: string; gap?: ReactNode }) {
+/** `ask`: the row can be selected to ask about (rows of the story's own chunks). */
+function Row({ r, hl, path, cls, gap, ask }: { r: SnippetRow; hl: boolean; path?: string; cls?: string; gap?: ReactNode; ask?: { step: number; atomId: string } }) {
   const cm = useComments();
   if (r.type === "gap")
     return (
@@ -136,12 +138,26 @@ function Row({ r, hl, path, cls, gap }: { r: SnippetRow; hl: boolean; path?: str
   const t = path ? rowTarget(r) : null;
   const button = t && path ? <CommentButton path={path} side={t.side} line={t.line} /> : null;
   const sel = !!(t && path && cm?.selected(path, t.side, t.line));
+  const mark = r.type === "add" ? "+" : r.type === "del" ? "-" : " ";
+  const shown = rowNumber(r);
+  const askable = !!(ask && path && shown != null);
   return (
     <>
       <tr
         className={`${r.type}${cls ? ` ${cls}` : ""}${hl ? " hl" : ""}${sel ? " sel" : ""}`}
         title={cls === "other" ? "Changed in another step" : undefined}
         onMouseEnter={t && path && cm ? () => cm.hover(path, t.side, t.line) : undefined}
+        {...(askable
+          ? {
+              "data-ask": "diff",
+              "data-step": ask!.step,
+              "data-atom": ask!.atomId,
+              "data-file": path,
+              "data-mark": mark,
+              ...(r.oldLine != null && r.type !== "add" ? { "data-old": r.oldLine } : {}),
+              ...(r.newLine != null && r.type !== "del" ? { "data-new": r.newLine } : {}),
+            }
+          : {})}
       >
         <td className="ln">
           {t?.side === "LEFT" ? button : null}
@@ -153,10 +169,11 @@ function Row({ r, hl, path, cls, gap }: { r: SnippetRow; hl: boolean; path?: str
         </td>
         <td className="code">
           <span className="sign">{sign}</span>
-          {r.text || " "}
+          <span className="tx">{r.text || " "}</span>
         </td>
       </tr>
       {t && path ? <LineComments path={path} side={t.side} line={t.line} /> : null}
+      {askable ? <AskRows anchor={{ step: ask!.step, table: "diff", file: path!, mark, line: shown! }} colSpan={3} /> : null}
     </>
   );
 }
@@ -172,7 +189,7 @@ function useRowHasComments(path: string | undefined) {
   };
 }
 
-function Fold({ rows, n, isHl, path, clsOf }: { rows: SnippetRow[]; n: number; isHl: (r: SnippetRow) => boolean; path?: string; clsOf: (r: SnippetRow) => string | undefined }) {
+function Fold({ rows, n, isHl, path, clsOf, ask }: { rows: SnippetRow[]; n: number; isHl: (r: SnippetRow) => boolean; path?: string; clsOf: (r: SnippetRow) => string | undefined; ask?: { step: number; atomId: string } }) {
   const hasComments = useRowHasComments(path);
   const hit = rows.some(isHl) || rows.some(hasComments);
   const [open, setOpen] = useState(false);
@@ -192,7 +209,7 @@ function Fold({ rows, n, isHl, path, clsOf }: { rows: SnippetRow[]; n: number; i
       </tbody>
       <tbody className={`fold-body${open ? " open" : ""}`}>
         {rows.map((r, i) => (
-          <Row key={i} r={r} hl={isHl(r)} path={path} cls={clsOf(r)} />
+          <Row key={i} r={r} hl={isHl(r)} path={path} cls={clsOf(r)} ask={ask} />
         ))}
       </tbody>
     </>
@@ -213,6 +230,8 @@ function DiffTable({ atomId, rows, cls, step, extra, top, bottom, gapControl }: 
   const path = byId.get(atomId)?.file;
   const isHl = (r: SnippetRow) => !!hl && hl.step === step && hl.atomId === atomId && cls === "story" && inRange(r, hl.from, hl.to);
   const clsOf = (r: SnippetRow) => (extra?.has(r) ? (r.type === "context" ? "extra" : "other") : undefined);
+  // The story's chunks can be asked about; raw diffs can't (they're for checking against GitHub).
+  const ask = cls === "story" ? { step, atomId } : undefined;
   const runs = useMemo(() => new Map(reindentRuns(rows, FOLD_MIN).map(([a, b, c]) => [a, [b, c] as const])), [rows]);
   const parts: ReactNode[] = [];
   let plain: SnippetRow[] = [];
@@ -221,7 +240,7 @@ function DiffTable({ atomId, rows, cls, step, extra, top, bottom, gapControl }: 
       parts.push(
         <tbody key={key}>
           {plain.map((r, i) => (
-            <Row key={i} r={r} hl={isHl(r)} path={path} cls={clsOf(r)} gap={gapControl?.(r)} />
+            <Row key={i} r={r} hl={isHl(r)} path={path} cls={clsOf(r)} gap={gapControl?.(r)} ask={ask} />
           ))}
         </tbody>,
       );
@@ -232,7 +251,7 @@ function DiffTable({ atomId, rows, cls, step, extra, top, bottom, gapControl }: 
     if (run) {
       const [end, n] = run;
       flush(`p${i}`);
-      parts.push(<Fold key={`f${i}`} rows={rows.slice(i, end + 1)} n={n} isHl={isHl} path={path} clsOf={clsOf} />);
+      parts.push(<Fold key={`f${i}`} rows={rows.slice(i, end + 1)} n={n} isHl={isHl} path={path} clsOf={clsOf} ask={ask} />);
       i = end;
     } else plain.push(rows[i]);
   }
@@ -420,7 +439,7 @@ function Cites({ cites, step, onCite }: { cites: Citation[]; step: number; onCit
   );
 }
 
-function ContextBlock({ c, step }: { c: ContextSnippet; step: number }) {
+function ContextBlock({ c, step, index }: { c: ContextSnippet; step: number; index: number }) {
   const { hl } = useContext(StoryCtx);
   const n = c.end - c.start + 1;
   const [open, setOpen] = useState(n <= CONTEXT_OPEN_MAX);
@@ -458,10 +477,15 @@ function ContextBlock({ c, step }: { c: ContextSnippet; step: number }) {
             const ln = c.start + i;
             const cls = [focus.has(ln) ? "focus" : "", lineHl(ln) ? "hl" : ""].filter(Boolean).join(" ");
             return (
-              <tr key={i} className={cls || undefined}>
-                <td className="ln">{ln}</td>
-                <td className="code">{l || " "}</td>
-              </tr>
+              <Fragment key={i}>
+                <tr className={cls || undefined} data-ask="ctx" data-step={step} data-ctx={index} data-file={c.file} data-mark=" " data-new={ln}>
+                  <td className="ln">{ln}</td>
+                  <td className="code">
+                    <span className="tx">{l || " "}</span>
+                  </td>
+                </tr>
+                <AskRows anchor={{ step, table: "ctx", file: c.file, mark: " ", line: ln }} colSpan={2} />
+              </Fragment>
             );
           })}
         </tbody>
@@ -510,7 +534,7 @@ function Step({ i, step, done }: { i: number; step: StoryStep; done: boolean }) 
           </p>
         ) : null}
         {(step.context ?? []).map((c, k) => (
-          <ContextBlock key={k} c={c} step={i} />
+          <ContextBlock key={k} c={c} step={i} index={k} />
         ))}
         <div className="walk">
           {beats.map((b, k) => (
@@ -650,7 +674,7 @@ function PendingStep({ i, label, atomIds, active, draft }: { i: number; label: s
 /** While a story is being written: the text so far of steps still streaming, by step index. */
 export type Writing = { drafts: Record<number, string> };
 
-export function StoryReader({ view, writing, footer, banner, headerExtra }: { view: StoryView; writing: Writing | null; footer: ReactNode; banner?: ReactNode; headerExtra?: ReactNode }) {
+export function StoryReader({ view, writing, footer, banner, headerExtra, ask }: { view: StoryView; writing: Writing | null; footer: ReactNode; banner?: ReactNode; headerExtra?: ReactNode; ask?: AskOptions }) {
   const { pr, atoms } = view;
   const byId = useMemo(() => new Map(atoms.map((a) => [a.id, a])), [atoms]);
   const files = useMemo(() => new Map(pr.files.map((f) => [f.path, f])), [pr]);
@@ -707,6 +731,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra }: { vi
 
   return (
     <StoryCtx.Provider value={{ byId, snippets, files, fileView, link, hl, setHl }}>
+      <AskProvider view={view} options={writing ? undefined : ask} highlight={setHl}>
       <div className="layout">
         <nav className="rail" aria-label="Story outline">
           <h2>Outline</h2>
@@ -801,6 +826,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra }: { vi
           <footer>{footer}</footer>
         </main>
       </div>
+      </AskProvider>
     </StoryCtx.Provider>
   );
 }

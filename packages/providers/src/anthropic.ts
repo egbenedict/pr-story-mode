@@ -1,6 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { CompletionRequest, LLMProvider, Usage } from "@prstory/core";
-import { Key, keyedFetch, withKeyRetry, type KeyHeader, type KeySource } from "./auth";
+import {
+  Key,
+  keyedFetch,
+  withKeyRetry,
+  type KeyHeader,
+  type KeySource,
+} from "./auth";
 
 export type AnthropicOptions = {
   model?: string;
@@ -27,7 +33,11 @@ export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
 export class AnthropicProvider implements LLMProvider {
   readonly id = "anthropic";
   readonly model: string;
-  readonly capabilities = { jsonSchema: true, maxContextTokens: 1_000_000, promptCaching: true };
+  readonly capabilities = {
+    jsonSchema: true,
+    maxContextTokens: 1_000_000,
+    promptCaching: true,
+  };
   private client: Anthropic;
   private effort: AnthropicOptions["effort"];
   private key: Key | null;
@@ -35,14 +45,23 @@ export class AnthropicProvider implements LLMProvider {
   constructor(opts: AnthropicOptions = {}) {
     this.model = opts.model ?? DEFAULT_ANTHROPIC_MODEL;
     this.effort = opts.effort ?? "medium";
-    this.key = opts.getKey ? new Key(opts.getKey, true) : opts.apiKey ? Key.fixed(opts.apiKey) : null;
+    this.key = opts.getKey
+      ? new Key(opts.getKey, true)
+      : opts.apiKey
+        ? Key.fixed(opts.apiKey)
+        : null;
     this.client = new Anthropic({
       baseURL: opts.baseURL,
       defaultHeaders: opts.headers,
       dangerouslyAllowBrowser: opts.browser,
       // With a key of our own, the SDK gets a stand-in (so it looks for no other credentials) and
       // keyedFetch puts the real key in the right header on each request.
-      ...(this.key ? { apiKey: "set-per-request", fetch: keyedFetch(this.key, opts.keyHeader ?? "x-api-key") } : {}),
+      ...(this.key
+        ? {
+            apiKey: "set-per-request",
+            fetch: keyedFetch(this.key, opts.keyHeader ?? "x-api-key"),
+          }
+        : {}),
     });
   }
 
@@ -65,47 +84,66 @@ export class AnthropicProvider implements LLMProvider {
     });
   }
 
-  complete(req: CompletionRequest): Promise<{ text: string; json?: unknown; usage: Usage }> {
+  complete(
+    req: CompletionRequest,
+  ): Promise<{ text: string; json?: unknown; usage: Usage }> {
     return withKeyRetry(this.key, () => this.completeOnce(req));
   }
 
-  private async completeOnce(req: CompletionRequest): Promise<{ text: string; json?: unknown; usage: Usage }> {
+  private async completeOnce(
+    req: CompletionRequest,
+  ): Promise<{ text: string; json?: unknown; usage: Usage }> {
     // The shared prefix (PR description, step order) goes first with a cache breakpoint,
     // so explanation windows after the first reuse it.
-    const messages: Anthropic.Beta.BetaMessageParam[] = req.messages.map((m, i) => {
-      if (i === 0 && m.role === "user" && req.sharedPrefix) {
-        return {
-          role: "user",
-          content: [
-            { type: "text", text: req.sharedPrefix, cache_control: { type: "ephemeral" } },
-            { type: "text", text: m.content },
-          ],
-        };
-      }
-      return { role: m.role, content: m.content };
-    });
-
-    const stream = this.client.beta.messages.stream({
-      model: this.model,
-      max_tokens: req.maxTokens,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      thinking: { type: "adaptive" },
-      output_config: {
-        effort: this.effort,
-        ...(req.schema ? { format: { type: "json_schema", schema: req.schema } } : {}),
+    const messages: Anthropic.Beta.BetaMessageParam[] = req.messages.map(
+      (m, i) => {
+        if (i === 0 && m.role === "user" && req.sharedPrefix) {
+          return {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: req.sharedPrefix,
+                cache_control: { type: "ephemeral" },
+              },
+              { type: "text", text: m.content },
+            ],
+          };
+        }
+        return { role: m.role, content: m.content };
       },
-      system: req.system,
-      messages,
-    });
+    );
+
+    const stream = this.client.beta.messages.stream(
+      {
+        model: this.model,
+        max_tokens: req.maxTokens,
+        betas: ["server-side-fallback-2026-07-01"],
+        fallbacks: "default",
+        thinking: { type: "adaptive" },
+        output_config: {
+          effort: this.effort,
+          ...(req.schema
+            ? { format: { type: "json_schema", schema: req.schema } }
+            : {}),
+        },
+        system: req.system,
+        messages,
+      },
+      { signal: req.signal },
+    );
     if (req.onText) stream.on("text", (delta) => req.onText!(delta));
     const msg = await stream.finalMessage();
 
     if (msg.stop_reason === "refusal") {
-      throw new Error(`The model declined this request${msg.stop_details?.category ? ` (${msg.stop_details.category})` : ""}.`);
+      throw new Error(
+        `The model declined this request${msg.stop_details?.category ? ` (${msg.stop_details.category})` : ""}.`,
+      );
     }
     if (msg.stop_reason === "max_tokens") {
-      throw new Error(`The response hit max_tokens (${req.maxTokens}) before finishing.`);
+      throw new Error(
+        `The response hit max_tokens (${req.maxTokens}) before finishing.`,
+      );
     }
 
     const text = msg.content

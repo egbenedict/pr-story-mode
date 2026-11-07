@@ -47,3 +47,20 @@ describe("comment formatting", () => {
     expect(shortcut({ key: "b", metaKey: false, ctrlKey: false, shiftKey: false })).toBeNull();
   });
 });
+
+import { answerBlocks } from "../src/reader/ask";
+
+describe("answer text", () => {
+  it("splits an answer into paragraphs, lists and code, even mid-stream", () => {
+    const text = "In short: it caps retries.\n\nSteps:\n- First [L9]\n- Then\n  continues\n\n1. one\n2. two\n\n```ts\nclamp(1, 0, 5)\n```\nAfter.\n\n```\nunfinished";
+    expect(answerBlocks(text)).toEqual([
+      { kind: "p", text: "In short: it caps retries." },
+      { kind: "p", text: "Steps:" },
+      { kind: "ul", items: ["First [L9]", "Then continues"] },
+      { kind: "ol", items: ["one", "two"] },
+      { kind: "code", text: "clamp(1, 0, 5)" },
+      { kind: "p", text: "After." },
+      { kind: "code", text: "unfinished" },
+    ]);
+  });
+});

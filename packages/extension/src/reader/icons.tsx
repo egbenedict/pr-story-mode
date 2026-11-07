@@ -13,6 +13,8 @@ const paths = {
   bullets: "M6 4.5h7 M6 8h7 M6 11.5h7 M3 4.5h.01 M3 8h.01 M3 11.5h.01",
   numbers: "M6.5 4.5h6.5 M6.5 8h6.5 M6.5 11.5h6.5 M2.5 3.5l1-.5v3 M2.5 9.2a1 1 0 0 1 2 .1c0 .7-2 1.5-2 2.2h2",
   suggest: "M3 4h6 M6 1v6 M3 12h6 M11 3v10 M11 13l-2-2 M11 13l2-2",
+  sparkle: "M7 2.5l1.2 3.3 3.3 1.2-3.3 1.2L7 11.5 5.8 8.2 2.5 7l3.3-1.2z M12.2 10.5v3.5 M10.5 12.2h3.5",
+  send: "M2.5 8h10 M9 4.5L12.5 8 9 11.5",
 } as const;
 
 export type IconName = keyof typeof paths;

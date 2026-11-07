@@ -135,6 +135,8 @@ export type CompletionRequest = {
   maxTokens: number;
   /** Called with each piece of output text as it streams, by providers that stream. */
   onText?: (delta: string) => void;
+  /** Cancels the call (the reader's Stop button). Providers that can't cancel ignore it. */
+  signal?: AbortSignal;
 };
 
 export interface LLMProvider {

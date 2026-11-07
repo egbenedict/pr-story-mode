@@ -44,7 +44,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     return (data as { model?: string }).model ?? this.model;
   }
 
-  private async post(body: Record<string, unknown>): Promise<unknown> {
+  private async post(body: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> {
     const f = this.opts.fetchImpl ?? fetch;
     const res = await f(`${this.opts.baseURL.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
@@ -54,6 +54,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         ...(this.key ? { Authorization: `Bearer ${await this.key.get()}` } : {}),
       },
       body: JSON.stringify(body),
+      signal,
     });
     if (!res.ok) throw Object.assign(new Error(`${this.id} ${res.status}: ${(await res.text()).slice(0, 300)}`), { status: res.status });
     return res.json();
@@ -70,7 +71,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     if (req.schema && this.capabilities.jsonSchema) {
       body.response_format = { type: "json_schema", json_schema: { name: "result", strict: true, schema: req.schema } };
     }
-    const data = (await withKeyRetry(this.key, () => this.post(body))) as {
+    const data = (await withKeyRetry(this.key, () => this.post(body, req.signal))) as {
       choices: { message: { content: string | null }; finish_reason: string }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };

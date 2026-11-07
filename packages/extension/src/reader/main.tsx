@@ -1,4 +1,4 @@
-import { fetchPullHead, fetchPullRequest, GitHubError, githubContextSource, modelFailure, parsePrUrl, READER_CSS, runPipeline, type LLMProvider, type PipelineEvent, type PipelineResult, type PRInput, type StoryStep, type Usage } from "@prstory/core";
+import { fetchPullHead, fetchPullRequest, GitHubError, githubContextSource, modelFailure, parsePrUrl, READER_CSS, runPipeline, type LLMProvider, type PipelineEvent, type PipelineResult, type PRInput, type StoryStep, type Usage, type ContextSource } from "@prstory/core";
 import { createProvider, estimateCost } from "@prstory/providers";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -6,6 +6,7 @@ import { getStory, putStory, repoKey, storyKey } from "../cache";
 import { createBrowserHost } from "../grammars";
 import { DEFAULT_APPEARANCE, styledCss } from "../appearance";
 import { embedAllowed, loadSettings, missingModelReason, onSettingsChanged, providerConfig, tokenFor, type Settings } from "../settings";
+import { ASK_CSS, type AskOptions } from "./ask";
 import { COMMENTS_CSS, CommentsNote, CommentsProvider, ReviewButton } from "./comments";
 import { DemoProvider } from "./demo";
 import { BrandMark, Icon } from "./icons";
@@ -274,6 +275,20 @@ function costShort(model: string, u: Required<Usage>): string {
   return `${n} tokens${c != null ? ` · ~$${c.toFixed(c < 0.1 ? 3 : 2)}` : ""}`;
 }
 
+/** Tokens and cost of several model uses together, for the top bar; "" before anything was used. */
+function spentShort(parts: { model: string; usage: Required<Usage> }[]): string {
+  let tokens = 0;
+  let cost: number | null = 0;
+  for (const p of parts) {
+    tokens += p.usage.inputTokens + p.usage.outputTokens + p.usage.cacheReadTokens + p.usage.cacheWriteTokens;
+    const c = estimateCost(p.model, p.usage);
+    cost = c == null || cost == null ? null : cost + c;
+  }
+  if (!tokens) return "";
+  const n = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(tokens);
+  return `${n} tokens${cost != null ? ` · ~$${cost.toFixed(cost < 0.1 ? 3 : 2)}` : ""}`;
+}
+
 /** Cost text, or "" before anything has been used. */
 const costSoFar = (model: string, u: Required<Usage>) => (u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheWriteTokens ? costText(model, u) : "");
 
@@ -288,6 +303,18 @@ function App() {
   const [live, setLive] = useState<Live | null>(null);
   const settingsRef = useRef<Settings | null>(null);
   const running = useRef(false);
+  // Questions asked about the code: what they cost, per model, and whether asking is possible.
+  const [askSpent, setAskSpent] = useState<{ model: string; usage: Required<Usage> }[]>([]);
+  const [askOff, setAskOff] = useState<string | null>(null);
+  const askSource = useRef<{ pr: PRInput; src: ContextSource } | null>(null);
+  useEffect(() => {
+    const check = (s: Settings) => {
+      const reason = missingModelReason(s);
+      setAskOff(DEMO || !reason ? null : `Asking needs a model: ${reason} Set one up in settings.`);
+    };
+    void loadSettings().then(check);
+    onSettingsChanged(check);
+  }, []);
 
   /** `withModel` undefined: use the model when one is set up. Settings are re-read each time, since they may have changed in the settings tab. */
   async function generate(withModel?: boolean) {
@@ -454,8 +481,43 @@ function App() {
   }, []);
 
   const prRef = ref ? `${ref.owner}/${ref.repo}#${ref.number}` : null;
-  // Once written, what the story cost stays in view (for a cached story, what it cost when written).
-  const spent = live && !live.writing && live.provider !== "none" ? costShort(live.model, live.usage) : "";
+  // Once written, what the story cost stays in view (for a cached story, what it cost when written),
+  // plus what questions about the code have cost since the reader opened.
+  const spentParts = [...(live && !live.writing && live.provider !== "none" ? [{ model: live.model, usage: live.usage }] : []), ...askSpent];
+  const spent = live && !live.writing ? spentShort(spentParts) : "";
+  const spentTitle = [
+    ...(live && live.provider !== "none" ? [`Writing this story with ${live.model}: ${costSoFar(live.model, live.usage)}`] : []),
+    ...askSpent.map((a) => `Questions with ${a.model}: ${costSoFar(a.model, a.usage)}`),
+  ].join("\n");
+  const ask: AskOptions | undefined =
+    ref && live && !live.writing
+      ? {
+          unavailable: askOff,
+          getProvider: async () => {
+            if (DEMO) return new DemoProvider();
+            const s = await loadSettings();
+            return missingModelReason(s) ? null : createProvider(providerConfig(s));
+          },
+          getSource: () => {
+            if (DEMO || !settingsRef.current) return null;
+            const pr = live.view.pr;
+            if (askSource.current?.pr !== pr) askSource.current = { pr, src: githubContextSource(ref, { token: tokenFor(settingsRef.current, ref.host) }, pr) };
+            return askSource.current.src;
+          },
+          onUsage: (u, model) =>
+            setAskSpent((list) => {
+              const add = (a: Required<Usage>): Required<Usage> => ({
+                inputTokens: a.inputTokens + u.inputTokens,
+                outputTokens: a.outputTokens + u.outputTokens,
+                cacheReadTokens: a.cacheReadTokens + (u.cacheReadTokens ?? 0),
+                cacheWriteTokens: a.cacheWriteTokens + (u.cacheWriteTokens ?? 0),
+              });
+              return list.some((x) => x.model === model) ? list.map((x) => (x.model === model ? { model, usage: add(x.usage) } : x)) : [...list, { model, usage: add(zeroUsage()) }];
+            }),
+          // Demo answers are kept apart from real ones.
+          storeKey: `${DEMO ? "demo:" : ""}${storyKey(repoKey(ref), ref.number)}`,
+        }
+      : undefined;
   const topbar = (
     <div className="topbar">
       <span className="brand">
@@ -468,7 +530,7 @@ function App() {
         <span className="pr-ref">
           <span className="ref-name">{prRef}</span>
           {spent ? (
-            <span className="spent" title={`${costSoFar(live!.model, live!.usage)}: what writing this story with ${live!.model} used`}>
+            <span className="spent" title={spentTitle}>
               {spent}
             </span>
           ) : null}
@@ -551,7 +613,7 @@ function App() {
     const story = (
       <>
         {topbar}
-        <StoryReader view={live.view} writing={live.writing} footer={footer} banner={banner} headerExtra={<CommentsNote prUrl={live.view.pr.url} />} />
+        <StoryReader view={live.view} writing={live.writing} footer={footer} banner={banner} headerExtra={<CommentsNote prUrl={live.view.pr.url} />} ask={ask} />
       </>
     );
     // Comments need a GitHub PR; a story without one (local preview) just reads.
@@ -713,7 +775,7 @@ function ErrorScreen({ phase, retry }: { phase: Extract<Phase, { kind: "error" }
   );
 }
 
-const BASE_CSS = READER_CSS + READER_EXTRA_CSS + COMMENTS_CSS;
+const BASE_CSS = READER_CSS + READER_EXTRA_CSS + COMMENTS_CSS + ASK_CSS;
 const style = document.createElement("style");
 style.textContent = styledCss(BASE_CSS, DEFAULT_APPEARANCE);
 document.head.appendChild(style);
