@@ -9,7 +9,8 @@ import { describeSecret, ghSignedIn, hasGh, loadConfig, readSecret, saveConfig, 
 
 /** Line-by-line answers. Kept in a queue so answers piped in all at once aren't lost. */
 function prompter() {
-  const rl = createInterface({ input: process.stdin, terminal: process.stdin.isTTY });
+  // With the terminal as output, readline shows what is typed and lets arrow keys and backspace edit it.
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: process.stdin.isTTY });
   const lines: string[] = [];
   const waiting: ((l: string | null) => void)[] = [];
   let closed = false;
@@ -21,7 +22,12 @@ function prompter() {
   const next = (): Promise<string | null> => (lines.length ? Promise.resolve(lines.shift()!) : closed ? Promise.resolve(null) : new Promise((r) => waiting.push(r)));
 
   async function ask(question: string, fallback = ""): Promise<string> {
-    process.stdout.write(`${question}${fallback ? ` [${fallback}]` : ""}: `);
+    // The question's last line is readline's prompt, so it's redrawn with the answer as it's edited.
+    const text = `${question}${fallback ? ` [${fallback}]` : ""}: `;
+    const nl = text.lastIndexOf("\n");
+    if (nl >= 0) process.stdout.write(text.slice(0, nl + 1));
+    rl.setPrompt(text.slice(nl + 1));
+    rl.prompt();
     const a = await next();
     if (a === null) throw new Error("Setup was cancelled.");
     if (!process.stdin.isTTY) process.stdout.write(`${a}\n`);
@@ -45,9 +51,12 @@ function prompter() {
   /** Runs `fn` with the terminal handed over (for `security`, which asks for the secret itself). */
   function handOver<T>(fn: () => T): T {
     rl.pause();
+    const raw = process.stdin.isTTY && process.stdin.isRaw;
+    if (raw) process.stdin.setRawMode(false);
     try {
       return fn();
     } finally {
+      if (raw) process.stdin.setRawMode(true);
       rl.resume();
     }
   }
