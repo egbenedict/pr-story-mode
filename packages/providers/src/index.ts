@@ -10,7 +10,7 @@ export { MockProvider } from "./mock";
 
 export type ProviderConfig =
   | { provider: "none" }
-  | ({ provider: "anthropic"; model?: string; baseURL?: string; effort?: "low" | "medium" | "high" | "xhigh" | "max"; browser?: boolean; keyHeader?: KeyHeader } & Auth)
+  | ({ provider: "anthropic"; model?: string; baseURL?: string; effort?: "low" | "medium" | "high" | "xhigh" | "max"; browser?: boolean; keyHeader?: KeyHeader; fallbacks?: boolean } & Auth)
   | ({ provider: "openai"; model?: string; baseURL?: string } & Auth)
   | ({ provider: "openai-compatible"; model: string; baseURL: string; jsonSchema?: boolean; maxContextTokens?: number } & Auth);
 
@@ -39,12 +39,12 @@ export function createProvider(cfg: ProviderConfig): LLMProvider | null {
   }
 }
 
-/** USD per million tokens: input, output, cache read, cache write (5-minute TTL). */
-const PRICES: Record<string, [number, number, number, number]> = {
-  "claude-opus-5-5": [4, 20, 0.2, 5],
+/** USD per million tokens: input, output, cache read (0.1× input), cache write (5-minute TTL, 1.25× input). */
+export const PRICES: Record<string, [number, number, number, number]> = {
+  "claude-opus-5-5": [4, 20, 0.4, 5],
   "claude-sonnet-5-5": [2, 10, 0.2, 2.5],
   "claude-haiku-5-5": [0.1, 0.5, 0.01, 0.125],
-  "claude-fable-5-1": [10, 50, 0.25, 12.5],
+  "claude-fable-5-1": [10, 50, 1, 12.5],
 };
 
 /** Estimated cost in USD, or null when the model's price is unknown (e.g. self-hosted). */

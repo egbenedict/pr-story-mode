@@ -176,6 +176,21 @@ describe("runPipeline", () => {
     expect(step1.match(/class="atom chunk"/g)).toHaveLength(2);
     expect(step1).toContain("continued");
   });
+
+  it("collects the distinct models that answered, as the provider reports them", async () => {
+    const { clamp, run, fmt } = await setup();
+    const mock = new MockProvider([plan([{ atomIds: [clamp], label: "Add clamp" }, { atomIds: [run], label: "Use clamp in run" }], [fmt]), explainAll]);
+    const served = ["claude-sonnet-5-5", "claude-opus-5-5"];
+    let n = 0;
+    const provider = { id: "anthropic", model: "claude-opus-5-5", capabilities: mock.capabilities, complete: async (req: CompletionRequest) => ({ ...(await mock.complete(req)), model: served[n++ % 2] }) };
+    const r = await runPipeline(pr, { host, provider });
+    expect(r.metrics.modelCalls.total).toBe(2);
+    expect(r.metrics.servedModels).toEqual(["claude-sonnet-5-5", "claude-opus-5-5"]);
+    expect(r.story.meta.model).toBe("claude-opus-5-5"); // still the requested model
+    // A provider that doesn't say which model answered leaves the list empty.
+    const quiet = await runPipeline(pr, { host, provider: new MockProvider([plan([{ atomIds: [clamp, run], label: "All" }], [fmt]), explainAll]) });
+    expect(quiet.metrics.servedModels).toEqual([]);
+  });
 });
 
 describe("staged ordering for large PRs", () => {

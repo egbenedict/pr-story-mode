@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { CompletionRequest, LLMProvider, Usage } from "@prstory/core";
+import type { Completion, CompletionRequest, LLMProvider } from "@prstory/core";
 import {
   Key,
   keyedFetch,
@@ -22,7 +22,14 @@ export type AnthropicOptions = {
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   /** Calling from a browser extension page with the user's own key (the SDK refuses browsers otherwise). */
   browser?: boolean;
+  /**
+   * Let the server answer with another model when the requested one declines (default true).
+   * False drops the fallback beta, so every answer comes from the requested model or fails.
+   */
+  fallbacks?: boolean;
 };
+
+const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 export const DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5";
 
@@ -41,9 +48,11 @@ export class AnthropicProvider implements LLMProvider {
   private client: Anthropic;
   private effort: AnthropicOptions["effort"];
   private key: Key | null;
+  private fallbacks: boolean;
 
   constructor(opts: AnthropicOptions = {}) {
     this.model = opts.model ?? DEFAULT_ANTHROPIC_MODEL;
+    this.fallbacks = opts.fallbacks ?? true;
     this.effort = opts.effort ?? "medium";
     this.key = opts.getKey
       ? new Key(opts.getKey, true)
@@ -65,6 +74,11 @@ export class AnthropicProvider implements LLMProvider {
     });
   }
 
+  /** The fallback beta and its parameter, or nothing when fallbacks are off. */
+  private fallbackParams() {
+    return this.fallbacks ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {};
+  }
+
   /**
    * A tiny request shaped like a story's (same features), to check the key and gateway work.
    * Costs well under a cent. Resolves with the model the server says answered.
@@ -74,8 +88,7 @@ export class AnthropicProvider implements LLMProvider {
       const msg = await this.client.beta.messages.create({
         model: this.model,
         max_tokens: 64,
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
+        ...this.fallbackParams(),
         thinking: { type: "adaptive" },
         output_config: { effort: "low" },
         messages: [{ role: "user", content: "Reply with OK." }],
@@ -84,15 +97,11 @@ export class AnthropicProvider implements LLMProvider {
     });
   }
 
-  complete(
-    req: CompletionRequest,
-  ): Promise<{ text: string; json?: unknown; usage: Usage }> {
+  complete(req: CompletionRequest): Promise<Completion> {
     return withKeyRetry(this.key, () => this.completeOnce(req));
   }
 
-  private async completeOnce(
-    req: CompletionRequest,
-  ): Promise<{ text: string; json?: unknown; usage: Usage }> {
+  private async completeOnce(req: CompletionRequest): Promise<Completion> {
     // The shared prefix (PR description, step order) goes first with a cache breakpoint,
     // so explanation windows after the first reuse it.
     const messages: Anthropic.Beta.BetaMessageParam[] = req.messages.map(
@@ -118,8 +127,7 @@ export class AnthropicProvider implements LLMProvider {
       {
         model: this.model,
         max_tokens: req.maxTokens,
-        betas: ["server-side-fallback-2026-07-01"],
-        fallbacks: "default",
+        ...this.fallbackParams(),
         thinking: { type: "adaptive" },
         output_config: {
           effort: this.effort,
@@ -161,6 +169,7 @@ export class AnthropicProvider implements LLMProvider {
     return {
       text,
       json,
+      model: msg.model,
       usage: {
         inputTokens: msg.usage.input_tokens,
         outputTokens: msg.usage.output_tokens,

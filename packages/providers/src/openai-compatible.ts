@@ -1,4 +1,4 @@
-import type { CompletionRequest, LLMProvider, Usage } from "@prstory/core";
+import type { Completion, CompletionRequest, LLMProvider } from "@prstory/core";
 import { Key, withKeyRetry, type KeySource } from "./auth";
 
 export type OpenAICompatibleOptions = {
@@ -60,7 +60,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     return res.json();
   }
 
-  async complete(req: CompletionRequest): Promise<{ text: string; json?: unknown; usage: Usage }> {
+  async complete(req: CompletionRequest): Promise<Completion> {
     const messages = [
       { role: "system", content: req.system },
       ...req.messages.map((m, i) =>
@@ -72,12 +72,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
       body.response_format = { type: "json_schema", json_schema: { name: "result", strict: true, schema: req.schema } };
     }
     const data = (await withKeyRetry(this.key, () => this.post(body, req.signal))) as {
+      model?: string;
       choices: { message: { content: string | null }; finish_reason: string }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
     const text = data.choices[0]?.message.content ?? "";
     return {
       text,
+      model: data.model,
       usage: { inputTokens: data.usage?.prompt_tokens ?? 0, outputTokens: data.usage?.completion_tokens ?? 0 },
     };
   }

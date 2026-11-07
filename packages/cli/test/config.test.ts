@@ -64,6 +64,9 @@ describe("choosing the model", () => {
   it("lets flags override the saved setup for one run", () => {
     expect(chooseModel({ model: "claude-haiku-5-5" }, gateway).cfg).toMatchObject({ model: "claude-haiku-5-5", baseURL: "https://llm-gateway.acme.test" });
     expect(chooseModel({ provider: "none" }, gateway).sendsTo).toBeNull();
+    // --no-fallbacks turns off server-side fallback for the run; without it the provider's default (on) holds.
+    expect(chooseModel({ "no-fallbacks": true }, gateway).cfg).toMatchObject({ provider: "anthropic", fallbacks: false });
+    expect(chooseModel({}, gateway).cfg).not.toHaveProperty("fallbacks");
   });
 
   it("without a setup, reads the environment the way Claude Code does", () => {

@@ -22,7 +22,7 @@ import { createProvider, estimateCost } from "@prstory/providers";
 import { checkCmd } from "./check";
 import { configPath, expandHome, githubToken, loadConfig, type Config } from "./config";
 import { createHost } from "./grammars";
-import { hasCommit, listCommits, listMerges, loadLocalPR, localContextSource } from "./local";
+import { hasCommit, listCommits, listMerges, loadLocalPR, localContextSource, readBodyFile, readIssuesFile } from "./local";
 import { chooseModel } from "./model";
 import { renderStoryHtml } from "./render";
 import { setupCmd } from "./setup";
@@ -36,6 +36,11 @@ Getting started:
 
 More:
   pr-story story --repo <dir> --base <ref> --head <ref>  Story for a local branch diff
+      [--title <text>] [--body-file <file>] [--issues-file <file>]
+                                     The PR's title, description (UTF-8 text file) and linked issues
+                                     (JSON array of {number, title, body, url?}). Without them the
+                                     title and description come from the head commit's message.
+                                     With a PR URL, they replace what GitHub has.
   pr-story bench --repo <dir> [--count 20] [--mode merges|commits] [--min-lines 1] [--max-lines 100000]
                                      Run the pipeline over recent merged PRs and check coverage
   pr-story atoms <PR URL> | --repo <dir> --base <ref> --head <ref>
@@ -46,6 +51,7 @@ Options (each overrides the saved setup for one run):
   --model <id>          Model (default claude-opus-5-5 for anthropic)
   --base-url <url>      A gateway, or an OpenAI-compatible server
   --effort <level>      Anthropic effort: low|medium|high|xhigh|max (default medium)
+  --no-fallbacks        Anthropic: don't let another model answer when the requested one declines
   --out <dir>           Output folder (default: the saved folder, else ./stories/<name>)
   --token <token>       GitHub token
   --repo <dir>          With a PR URL: a local clone to read unchanged context from (else it's read from GitHub)
@@ -67,6 +73,8 @@ async function main() {
       base: { type: "string" },
       head: { type: "string" },
       title: { type: "string" },
+      "body-file": { type: "string" },
+      "issues-file": { type: "string" },
       provider: { type: "string" },
       model: { type: "string" },
       "base-url": { type: "string" },
@@ -78,6 +86,7 @@ async function main() {
       "min-lines": { type: "string" },
       "max-lines": { type: "string" },
       "no-context": { type: "boolean" },
+      "no-fallbacks": { type: "boolean" },
       config: { type: "string" },
       open: { type: "boolean" },
       "no-open": { type: "boolean" },
@@ -127,16 +136,30 @@ function tokenFor(host: string, v: Values, config: Config): Promise<string | und
 }
 
 async function loadInput(target: string | undefined, v: Values, config: Config): Promise<PRInput> {
+  // Read these first, so a bad file fails before anything is fetched.
+  const bodyFile = str(v, "body-file");
+  const issuesFile = str(v, "issues-file");
+  const meta = {
+    title: str(v, "title"),
+    body: bodyFile ? readBodyFile(resolve(bodyFile)) : undefined,
+    issues: issuesFile ? readIssuesFile(resolve(issuesFile)) : undefined,
+  };
+  let pr: PRInput;
   if (target) {
     const ref = parsePrUrl(target);
     if (!ref) throw new Error(`Not a pull request URL: ${target}`);
-    return fetchPullRequest(ref, { token: await tokenFor(ref.host, v, config), apiBase: process.env.GITHUB_API_URL });
+    pr = await fetchPullRequest(ref, { token: await tokenFor(ref.host, v, config), apiBase: process.env.GITHUB_API_URL });
+  } else {
+    const repo = str(v, "repo");
+    const base = str(v, "base");
+    const head = str(v, "head");
+    if (!repo || !base || !head) throw new Error("Give a PR URL, or --repo, --base and --head.");
+    pr = loadLocalPR(resolve(repo), base, head);
   }
-  const repo = str(v, "repo");
-  const base = str(v, "base");
-  const head = str(v, "head");
-  if (!repo || !base || !head) throw new Error("Give a PR URL, or --repo, --base and --head.");
-  return loadLocalPR(resolve(repo), base, head, { title: str(v, "title") });
+  if (meta.title !== undefined) pr.title = meta.title;
+  if (meta.body !== undefined) pr.body = meta.body;
+  if (meta.issues !== undefined) pr.issues = meta.issues;
+  return pr;
 }
 
 /**
@@ -217,6 +240,7 @@ function printSummary(r: PipelineResult, cost: number | null) {
     const failPct = m.citations ? ((100 * m.groundingFailures) / m.citations).toFixed(1) : "0";
     console.log(`Citations: ${m.citations}, ${m.groundingFailures} failed grounding (${failPct}%)`);
     console.log(`Tokens: ${m.tokens.toLocaleString()}${cost != null ? ` (~$${cost.toFixed(3)})` : ""}`);
+    if (m.servedModels.some((x) => x !== r.story.meta.model)) console.log(`Served by: ${m.servedModels.join(", ")} (requested ${r.story.meta.model})`);
   }
   console.log(`Time: ${(m.ms.total / 1000).toFixed(1)}s total, first step at ${m.ms.firstStep != null ? (m.ms.firstStep / 1000).toFixed(1) + "s" : "n/a"}`);
 }
@@ -284,6 +308,7 @@ async function benchCmd(v: Values, config: Config) {
       ms: m.ms.total,
       modelCalls: m.modelCalls.total,
       failedModelCalls: m.modelCalls.failed,
+      servedModels: m.servedModels.join(" "),
       modelError: m.providerErrors[0] ?? "",
     };
     rows.push(row);

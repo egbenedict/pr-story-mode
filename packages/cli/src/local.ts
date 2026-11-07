@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { definedOnLine, isGeneratedPath, isLockfile, packForPath, parseUnifiedDiff, type ContextSource, type PRFile, type PRInput } from "@prstory/core";
 
 function git(repo: string, ...args: string[]): string {
@@ -49,6 +50,33 @@ export function loadLocalPR(
     headSha,
     files,
   };
+}
+
+/** A PR description read from a UTF-8 text file (`--body-file`). */
+export function readBodyFile(path: string): string {
+  return readFileSync(path, "utf8");
+}
+
+/**
+ * Linked issues read from a JSON file (`--issues-file`): an array of `{number, title, body, url?}`.
+ * Throws naming the file and the first bad entry when the shape is wrong.
+ */
+export function readIssuesFile(path: string): NonNullable<PRInput["issues"]> {
+  let data: unknown;
+  try {
+    data = JSON.parse(readFileSync(path, "utf8"));
+  } catch (err) {
+    throw new Error(`${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (!Array.isArray(data)) throw new Error(`${path} should hold a JSON array of issues.`);
+  return data.map((i, n) => {
+    const ok =
+      !!i && typeof i === "object" &&
+      typeof i.number === "number" && typeof i.title === "string" && typeof i.body === "string" &&
+      (i.url === undefined || typeof i.url === "string");
+    if (!ok) throw new Error(`${path}: issue ${n} should be {number, title, body, url?} (number a number, the rest strings).`);
+    return { number: i.number, title: i.title, body: i.body, ...(i.url !== undefined ? { url: i.url } : {}) };
+  });
 }
 
 export function listMerges(repo: string, n: number): { sha: string; subject: string; body: string }[] {

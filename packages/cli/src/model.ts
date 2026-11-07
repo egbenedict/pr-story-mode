@@ -74,7 +74,7 @@ export function chooseModel(v: Values, config: Config): ModelChoice {
       sendsTo = null;
       break;
     case "anthropic":
-      cfg = { provider: "anthropic", model: model ?? DEFAULT_ANTHROPIC_MODEL, baseURL, effort: (str(v, "effort") ?? s?.effort) as "medium" | undefined, keyHeader, ...auth };
+      cfg = { provider: "anthropic", model: model ?? DEFAULT_ANTHROPIC_MODEL, baseURL, effort: (str(v, "effort") ?? s?.effort) as "medium" | undefined, keyHeader, ...(v["no-fallbacks"] === true ? { fallbacks: false } : {}), ...auth };
       sendsTo = hostOf(baseURL ?? process.env.ANTHROPIC_BASE_URL ?? "https://api.anthropic.com");
       if (!keyFrom) keyFrom = "an `ant auth login` profile, if there is one";
       break;

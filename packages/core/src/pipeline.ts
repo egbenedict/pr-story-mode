@@ -37,6 +37,8 @@ export type PipelineMetrics = {
   providerErrors: string[];
   /** Model calls made and how many of them failed. */
   modelCalls: { total: number; failed: number };
+  /** Distinct models that answered, as the provider reported them (empty when it doesn't say). */
+  servedModels: string[];
   orderOverrides: number;
   undeclaredViolations: number;
   /** Steps whose explanation was carried over from the previous story (0 without one). */
@@ -85,7 +87,7 @@ export async function runPipeline(
   const t0 = Date.now();
   const emit = opts.onEvent ?? (() => {});
   const usage: Required<Usage> = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
-  const calls = { total: 0, failed: 0, errors: [] as string[] };
+  const calls = { total: 0, failed: 0, errors: [] as string[], served: new Set<string>() };
   const provider = opts.provider ? meter(opts.provider, usage, calls) : null;
 
   emit({ type: "stage", stage: "atomize" });
@@ -177,6 +179,7 @@ export async function runPipeline(
       orderErrors: order.errors,
       providerErrors: calls.errors,
       modelCalls: { total: calls.total, failed: calls.failed },
+      servedModels: [...calls.served],
       orderOverrides: steps.filter((s) => s.orderOverride).length,
       reusedSteps: reused.size,
       undeclaredViolations: dependencyViolations(order.plan, atoms, edges).length,
@@ -209,8 +212,11 @@ export function modelFailure(r: PipelineResult): string | null {
   return null;
 }
 
-/** Wrap a provider so every call's usage is added to `total`, and failures are recorded in `calls`. */
-function meter(p: LLMProvider, total: Required<Usage>, calls: { total: number; failed: number; errors: string[] }): LLMProvider {
+/**
+ * Wrap a provider so every call's usage is added to `total`, failures are recorded in `calls`, and
+ * the model that answered each call is collected in `calls.served`.
+ */
+function meter(p: LLMProvider, total: Required<Usage>, calls: { total: number; failed: number; errors: string[]; served: Set<string> }): LLMProvider {
   return {
     id: p.id,
     model: p.model,
@@ -230,6 +236,7 @@ function meter(p: LLMProvider, total: Required<Usage>, calls: { total: number; f
       total.outputTokens += res.usage.outputTokens;
       total.cacheReadTokens += res.usage.cacheReadTokens ?? 0;
       total.cacheWriteTokens += res.usage.cacheWriteTokens ?? 0;
+      if (res.model) calls.served.add(res.model);
       return res;
     },
   };

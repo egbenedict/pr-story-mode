@@ -141,9 +141,17 @@ export type CompletionRequest = {
   signal?: AbortSignal;
 };
 
+export type Completion = {
+  text: string;
+  json?: unknown;
+  usage: Usage;
+  /** The model that answered, when the provider reports it (it can differ from the requested one after a fallback). */
+  model?: string;
+};
+
 export interface LLMProvider {
   id: string;
   model: string;
   capabilities: { jsonSchema: boolean; maxContextTokens: number; promptCaching: boolean };
-  complete(req: CompletionRequest): Promise<{ text: string; json?: unknown; usage: Usage }>;
+  complete(req: CompletionRequest): Promise<Completion>;
 }
