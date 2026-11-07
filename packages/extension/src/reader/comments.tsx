@@ -34,7 +34,9 @@ import type { StoryView } from "./Story";
 
 export const COMMENTS_CSS = `
 .diff td.ln { position: relative; }
-.cm-add { position: absolute; left: 2px; top: 1px; width: 16px; height: 16px; border-radius: 4px; border: 0; padding: 0; background: var(--accent); color: var(--on-accent); font: 600 13px/16px var(--sans); cursor: pointer; opacity: 0; }
+/* The plus is drawn, not typed: a font's "+" sits a little off the middle of its line. The square is centered on the row's first line. */
+.cm-add { position: absolute; left: 2px; top: calc((var(--code-size, 12.5px) * 1.5 - 16px) / 2); width: 16px; height: 16px; display: grid; place-items: center; border-radius: 4px; border: 0; padding: 0; background: var(--accent); color: var(--on-accent); cursor: pointer; opacity: 0; }
+.cm-add svg { display: block; }
 .diff tr:hover .cm-add, .cm-add:focus-visible { opacity: 1; }
 .diff tr.sel td.code { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .diff tr.sel td.ln { box-shadow: inset 2px 0 0 var(--accent); }
@@ -603,7 +605,9 @@ export function CommentButton({ path, side, line }: { path: string; side: Side; 
       // Mouse clicks are handled on mouse down; this is for the keyboard (Enter or Space).
       onClick={(e) => e.detail === 0 && cm.open(path, side, line, e.shiftKey)}
     >
-      +
+      <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true" focusable="false">
+        <path d="M5 1.5v7M1.5 5h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      </svg>
     </button>
   );
 }
