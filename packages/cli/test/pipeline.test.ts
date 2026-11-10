@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atomizePR, buildGraph, classifyAtoms, EXPLAIN_SYSTEM, modelFailure, planFromPrevious, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
+import { atomizePR, buildGraph, classifyAtoms, EXPLAIN_SYSTEM, modelFailure, ORDER_SYSTEM, planFromPrevious, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
 import { MockProvider } from "@prstory/providers";
 import { createHost } from "../src/grammars";
 import { renderStoryHtml } from "../src/render";
@@ -230,6 +230,43 @@ describe("explanation voice", () => {
     expect(EXPLAIN_SYSTEM).toContain("You did not write the pull request");
     expect(EXPLAIN_SYSTEM).toContain("third person");
     expect(EXPLAIN_SYSTEM).toMatch(/Never use "I", "we"/);
+  });
+});
+
+describe("explanation length", () => {
+  it("sends a word target with each step, a size note to the planner, and counts the words written", async () => {
+    const { clamp, run, fmt } = await setup();
+    const provider = new MockProvider([plan([{ atomIds: [clamp], label: "Add clamp" }, { atomIds: [run], label: "Use clamp in run" }], [fmt]), explainAll]);
+    const r = await runPipeline(pr, { host, provider });
+    // A PR of a few lines gets a one-sentence summary; the number of steps is left to its structure.
+    expect(provider.requests[0].messages[0].content).toMatch(/This is a small PR \(\d+ changed lines? to explain\), so keep the summary to one sentence\./);
+    expect(provider.requests[0].messages[0].content).not.toMatch(/at most \d+ steps/);
+    expect(provider.requests[1].messages[0].content).toMatch(/## Step 1: Add clamp \(about \d+ words\)/);
+    // Each explained step gets "Step N starts here." (4), "Step N continues." (3), "A cut that points nowhere." (5).
+    expect(r.metrics.explainedSteps).toBe(2);
+    expect(r.metrics.words).toBe(24);
+  });
+
+  it("scales the word target with the detail level", async () => {
+    const { clamp, run, fmt } = await setup();
+    const target = async (detail?: "brief" | "thorough") => {
+      const provider = new MockProvider([plan([{ atomIds: [clamp], label: "Add clamp" }, { atomIds: [run], label: "Use clamp in run" }], [fmt]), explainAll]);
+      await runPipeline(pr, { host, provider, detail });
+      return +/## Step 1: Add clamp \(about (\d+) words\)/.exec(provider.requests[1].messages[0].content)![1];
+    };
+    const [brief, standard, thorough] = [await target("brief"), await target(), await target("thorough")];
+    expect(brief).toBeLessThan(standard);
+    expect(thorough).toBeGreaterThan(standard);
+  });
+
+  it("tells the planner to organize by the change's structure, not a step count", () => {
+    expect(ORDER_SYSTEM).toContain("Let the structure of the change decide the steps");
+    expect(ORDER_SYSTEM).not.toMatch(/A step is usually one atom|how many steps suit/);
+  });
+
+  it("tells the model not to restate the code and not to split beats by a line count", () => {
+    expect(EXPLAIN_SYSTEM).toContain("don't restate what the code plainly says");
+    expect(EXPLAIN_SYSTEM).not.toMatch(/5 to 25 lines per beat/);
   });
 });
 

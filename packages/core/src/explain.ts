@@ -3,6 +3,7 @@ import { fallbackLabel } from "./order";
 import { partialStrings, streamedArray, throttle } from "./partial-json";
 import { atomLabel, atomSnippet, lineCounts, rowNumber, snippetText, type SnippetRow } from "./snippet";
 import { promptCollapses } from "./collapse";
+import { countWords, stepWordBudget, type Detail } from "./length";
 import type { Beat, ChangeAtom, Citation, ContextSnippet, JSONSchema, LLMProvider, PRInput, StoryStep } from "./types";
 import type { Plan } from "./validate";
 
@@ -13,10 +14,12 @@ Explain each step as a sequence of short beats. A beat is one to three sentences
 Voice: describe the changes in the third person. Make the code or the PR the subject ("This adds…", "The new branch handles…", "The PR moves the old loop into…"), or say "the author" when intent matters. Never use "I", "we", "my" or "our" for the changes, and never claim to have written, tested or decided anything. Where the description gives the reason for a change, attribute it ("the description says…"); otherwise present reasons as what the code suggests, not as a fact.
 
 - Go through each step's snippet from top to bottom. If a step has several atoms, take them in the order shown.
-- End each beat at the last line it covers by setting \`throughAtomId\` and \`throughLine\` (the number at the left of that line). The next beat picks up on the following line. Aim for about 5 to 25 lines per beat, splitting long code at natural boundaries such as a new branch, a loop, or a call to a helper. A short step can be a single beat.
+- End each beat at the last line it covers by setting \`throughAtomId\` and \`throughLine\` (the number at the left of that line). The next beat picks up on the following line. Start a new beat only where there is something new to say, such as a separate branch, a change in behavior or an edge case. One beat can cover 40 or more lines of straightforward code, and a step with fewer than about 20 changed lines is usually a single beat.
 - The last beat of a step runs to the end of its snippet. Leave \`throughAtomId\` empty and \`throughLine\` 0 only for a beat that needs no code, such as a sentence linking to the previous step.
-- Say what the code does and why, as concretely as someone who knows the change well: name the variables and calls involved, and point out edge cases, behavior changes and anything a reviewer should check. Do not invent problems.
-- Lines marked \`~\` changed only in indentation. Say so briefly instead of explaining them again.
+- Each step's heading gives a rough word count for its explanation, scaled to the size of its change. It is a target, not a quota: write less when the code speaks for itself, and go over only where something needs it.
+- The reader sees every line, so don't restate what the code plainly says: skip narrating assignments, variable setup, imports, and calls whose names say what they do. Spend the words on what the reader can't see at a glance: why the change is made, how behavior differs from before, edge cases, how the step connects to others, and anything a reviewer should check. Be concrete and name the variables and calls you discuss. Do not invent problems.
+  For example, instead of "The new path sets up \`end\`, \`spanStart\` (start of the current piece) and \`numMatches\` (the next array index).", leave the setup out, or say what matters about it: "With the flag on, every \`string.split\` call takes this path; the old code stays in the \`else\` branch."
+- Lines marked \`~\` changed only in indentation. Say so in a short clause instead of explaining them again.
 - The first beat of a step follows from the step before; where the topic shifts, make that connection in its first sentence.
 - Write plain sentences: no headings, bullet lists or dramatic framing. Put identifiers, flags, file names and literal values in backticks.
 - \`cites\` lists the lines a beat discusses, as the atom ID with the first and last line number. Cite only atoms shown in this request.
@@ -71,6 +74,10 @@ export type ExplainStats = {
   missingSteps: number;
   tokens: number;
   windows: number;
+  /** Words in the explanations the model wrote (template text for missing steps not counted). */
+  words: number;
+  /** Steps whose explanation the model wrote, so words / explainedSteps is words per step. */
+  explainedSteps: number;
 };
 
 /** Split steps into windows of consecutive steps that fit the context budget. */
@@ -108,11 +115,12 @@ export async function explainSteps(
   reuse: Map<number, StoryStep> = new Map(),
   /** The text written so far for a step that is still streaming. */
   onDraft?: (index: number, text: string) => void,
+  opts: { detail?: Detail } = {},
 ): Promise<{ steps: StoryStep[]; stats: ExplainStats }> {
   const byId = new Map(atoms.map((a) => [a.id, a]));
   const files = new Map(pr.files.map((f) => [f.path, f]));
   const snippets = new Map<string, SnippetRow[]>(atoms.map((a) => [a.id, atomSnippet(files.get(a.file), a)]));
-  const stats: ExplainStats = { citations: 0, groundingFailures: 0, beats: 0, badCuts: 0, missingSteps: 0, tokens: 0, windows: 0 };
+  const stats: ExplainStats = { citations: 0, groundingFailures: 0, beats: 0, badCuts: 0, missingSteps: 0, tokens: 0, windows: 0, words: 0, explainedSteps: 0 };
 
   const steps: StoryStep[] = plan.steps.map((s, i) => ({
     atomIds: s.atomIds,
@@ -147,7 +155,8 @@ export async function explainSteps(
       return `Atom ${id}: ${atomLabel(a)} (${what}, +${add} −${del})\n\`\`\`\n${snippetText(rows, Infinity, promptCollapses(rows, a))}\n\`\`\``;
     });
     const ctx = ctxLabels.filter((c) => c.step === i).map(({ label, snip }) => `${label}: ${contextCaption(snip)}, \`${snip.file}\` lines ${snip.start}–${snip.end} (unchanged)\n\`\`\`\n${numbered(snip)}\n\`\`\``);
-    return `## Step ${i + 1}: ${s.label}${s.orderOverride ? `\n(Placed before its dependencies on purpose: ${s.orderOverride})` : ""}\n\n${parts.join("\n\n")}${ctx.length ? `\n\nUnchanged context for this step:\n\n${ctx.join("\n\n")}` : ""}`;
+    const words = stepWordBudget(s.atomIds.map((id) => byId.get(id)!), opts.detail);
+    return `## Step ${i + 1}: ${s.label} (about ${words} words)${s.orderOverride ? `\n(Placed before its dependencies on purpose: ${s.orderOverride})` : ""}\n\n${parts.join("\n\n")}${ctx.length ? `\n\nUnchanged context for this step:\n\n${ctx.join("\n\n")}` : ""}`;
   });
 
   const budget = Math.max(2000, Math.floor(provider.capabilities.maxContextTokens * 0.3) - estimateTokens(sharedPrefix));
@@ -180,10 +189,12 @@ export async function explainSteps(
         stats.missingSteps++;
         steps[i].explanation = [templateExplanation(steps[i].atomIds.map((id) => byId.get(id)!))];
       } else {
+        stats.explainedSteps++;
         const inStep = new Set(steps[i].atomIds);
         steps[i].explanation = beats.map((p) => {
           const o = p as { text?: unknown; cites?: unknown; throughAtomId?: unknown; throughLine?: unknown };
           stats.beats++;
+          if (typeof o.text === "string") stats.words += countWords(o.text);
           let through: Beat["through"];
           if (typeof o.throughAtomId === "string" && o.throughAtomId) {
             const range = inStep.has(o.throughAtomId) ? allowed.get(o.throughAtomId) : undefined;

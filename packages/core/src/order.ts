@@ -3,6 +3,7 @@ import { dependencyOrder, type Edge } from "./graph";
 import { addUsage, completeJson, estimateTokens, prHeader } from "./llm";
 import { atomLabel, atomSnippet, lineCounts, snippetText } from "./snippet";
 import { promptCollapses } from "./collapse";
+import { explainableLines, sizeHint } from "./length";
 import type { ChangeAtom, JSONSchema, LLMProvider, Msg, PRInput } from "./types";
 import { validatePlan, type Plan } from "./validate";
 
@@ -13,11 +14,12 @@ export const ORDER_SYSTEM = `You plan the reading order for a code review. A pul
 Rules:
 - Every atom ID appears exactly once, either in a step or in the \`mechanical\` list.
 - Only atoms tagged mechanical (formatting, renames, import reshuffles, lockfiles, generated files) may go in \`mechanical\`, and they normally should. Put a mechanical atom in a step only if the reader needs it to follow the story.
-- A step is usually one atom. Put a few atoms in one step only when they read best together, for example the same small edit repeated in several places, or a tiny helper and its single use.
+- Organize the steps the way an experienced reviewer would want to read this change. Each step is one coherent idea that a reviewer can understand and judge on its own, such as a new type with the methods built on it, a helper with the callers that motivate it, the same edit repeated across files, or the cases in one test file.
+- Let the structure of the change decide the steps, not the number of atoms or files. Atoms belong in one step when they only make sense together; atoms that do separate things get separate steps, even when they sit in the same file. Two checks: a step shouldn't be a fragment the reviewer can't judge without reading the next one, and it shouldn't bundle unrelated work the reviewer would want to stop halfway through. A focused fix is often a single step; a PR with several independent parts needs a step for each.
 - Respect dependencies. "A → B" means atom A defines something atom B uses, so A's step must come no later than B's. If the story reads clearly better with B first (for example starting from the entry point a user calls), keep that order and set \`orderOverride\` on B's step to a short reason. Otherwise set \`orderOverride\` to an empty string.
 - Follow the logic of the change: data shapes and core definitions first, then the code that uses them, then wiring and configuration. Tests go right after the code they test, or at the end.
 - \`label\` is a short plain phrase for the outline, such as "Add retry to \`fetchTrail\`". No numbering.
-- \`summary\` is two or three plain sentences on what the PR does and why, shown at the top of the story.
+- \`summary\` is one to three plain sentences on what the PR does and why, shown at the top of the story. Keep it to one sentence for a small PR, and don't list every change: the steps do that.
 - In \`summary\` and labels, put identifiers, flags, file names and literal values in backticks.`;
 
 export const ORDER_SCHEMA: JSONSchema = {
@@ -115,7 +117,9 @@ export function orderPrompt(pr: PRInput, atoms: ChangeAtom[], edges: Edge[], bud
     body = render(maxRows);
     if (estimateTokens(header + body + deps) <= budgetTokens) break;
   }
-  return `${header}\n# Atoms\n\n${body}\n\n# Dependencies\n\n${deps}\n\nReturn the plan as JSON.`;
+  const live = atoms.filter((a) => !a.mechanical);
+  const size = sizeHint(explainableLines(live), live.length);
+  return `${header}\n# Atoms\n\n${body}\n\n# Dependencies\n\n${deps}\n\n${size ? `${size}\n\n` : ""}Return the plan as JSON.`;
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   atomizePR,
   classifyAtoms,
   buildGraph,
+  countWords,
   fetchPullRequest,
   githubContextSource,
   lineCounts,
@@ -22,7 +23,7 @@ import { createProvider, estimateCost } from "@prstory/providers";
 import { checkCmd } from "./check";
 import { configPath, expandHome, githubToken, loadConfig, type Config } from "./config";
 import { createHost } from "./grammars";
-import { hasCommit, listCommits, listMerges, loadLocalPR, localContextSource, readBodyFile, readIssuesFile } from "./local";
+import { hasCommit, listCommits, listMerges, listShas, loadLocalPR, localContextSource, readBodyFile, readIssuesFile } from "./local";
 import { chooseModel } from "./model";
 import { renderStoryHtml } from "./render";
 import { setupCmd } from "./setup";
@@ -42,7 +43,10 @@ More:
                                      title and description come from the head commit's message.
                                      With a PR URL, they replace what GitHub has.
   pr-story bench --repo <dir> [--count 20] [--mode merges|commits] [--min-lines 1] [--max-lines 100000]
-                                     Run the pipeline over recent merged PRs and check coverage
+                 [--shas <sha,sha,…>]
+                                     Run the pipeline over recent merged PRs and check coverage.
+                                     With --shas, run exactly those commits (merges diff parent 1
+                                     to parent 2). Each story is saved in <out>/stories/.
   pr-story atoms <PR URL> | --repo <dir> --base <ref> --head <ref>
                                      Print the change atoms and dependency edges
 
@@ -85,6 +89,7 @@ async function main() {
       mode: { type: "string" },
       "min-lines": { type: "string" },
       "max-lines": { type: "string" },
+      shas: { type: "string" },
       "no-context": { type: "boolean" },
       "no-fallbacks": { type: "boolean" },
       config: { type: "string" },
@@ -257,21 +262,26 @@ async function benchCmd(v: Values, config: Config) {
   const host = createHost();
 
   // Scan more history than needed, since size filters skip some.
-  const candidates = mode === "commits" ? listCommits(dir, count * 5) : listMerges(dir, count * 5);
+  const shaList = str(v, "shas")?.split(/[\s,]+/).filter(Boolean) ?? [];
+  const candidates = shaList.length
+    ? listShas(dir, shaList)
+    : (mode === "commits" ? listCommits(dir, count * 5) : listMerges(dir, count * 5)).map((c) => ({ ...c, merge: mode !== "commits" }));
+  const out = resolve(str(v, "out") ?? join("bench", dir.split("/").pop()!));
+  mkdirSync(join(out, "stories"), { recursive: true });
   const rows: Record<string, unknown>[] = [];
   let ran = 0;
   let passed = 0;
   let modelStop: string | null = null;
   for (const c of candidates) {
-    if (ran >= count) break;
+    if (!shaList.length && ran >= count) break;
     let pr: PRInput;
     try {
-      pr = mode === "commits" ? loadLocalPR(dir, `${c.sha}^`, c.sha, { title: c.subject, body: c.body }) : loadLocalPR(dir, `${c.sha}^1`, `${c.sha}^2`, { title: c.subject, body: c.body });
+      pr = c.merge ? loadLocalPR(dir, `${c.sha}^1`, `${c.sha}^2`, { title: c.subject, body: c.body }) : loadLocalPR(dir, `${c.sha}^`, c.sha, { title: c.subject, body: c.body });
     } catch {
       continue;
     }
     const changed = pr.files.reduce((n, f) => n + f.hunks.reduce((k, h) => k + h.lines.filter((l) => l.type !== "context").length, 0), 0);
-    if (changed < minLines || changed > maxLines) continue;
+    if (!shaList.length && (changed < minLines || changed > maxLines)) continue;
     ran++;
     const r = await runPipeline(pr, { host, provider, contextSource: v["no-context"] === true ? null : localContextSource(dir, pr.headSha), noContext: v["no-context"] === true });
     if (r.coverage.ok) passed++;
@@ -299,6 +309,11 @@ async function benchCmd(v: Values, config: Config) {
       groundingFailPct: m.citations ? +((100 * m.groundingFailures) / m.citations).toFixed(1) : 0,
       missingExplanations: m.missingExplanations,
       badCuts: m.badCuts,
+      words: m.words,
+      wordsPerStep: m.explainedSteps ? Math.round(m.words / m.explainedSteps) : 0,
+      wordsPerLine: m.changedLines && m.explainedSteps ? +(m.words / m.changedLines).toFixed(2) : 0,
+      beatsPerStep: m.explainedSteps ? +(m.beats / m.steps).toFixed(1) : 0,
+      summaryWords: countWords(r.story.summary),
       tokens: m.tokens,
       inputTokens: m.usage.inputTokens,
       outputTokens: m.usage.outputTokens,
@@ -312,7 +327,8 @@ async function benchCmd(v: Values, config: Config) {
       modelError: m.providerErrors[0] ?? "",
     };
     rows.push(row);
-    console.log(`${row.coverage === "ok" ? "✓" : "✗"} ${row.sha} ${String(row.lines).padStart(5)} lines ${String(row.atoms).padStart(4)} atoms ${String(row.steps).padStart(4)} steps  ${row.title}`);
+    writeFileSync(join(out, "stories", `${row.sha}.json`), JSON.stringify({ title: c.subject, story: r.story, metrics: m }, null, 2));
+    console.log(`${row.coverage === "ok" ? "✓" : "✗"} ${row.sha} ${String(row.lines).padStart(5)} lines ${String(row.atoms).padStart(4)} atoms ${String(row.steps).padStart(4)} steps ${String(row.wordsPerStep).padStart(4)} w/step  ${row.title}`);
     if (!r.coverage.ok) console.log(`    missing: ${r.coverage.missing.slice(0, 5).join(", ")}  duplicated: ${r.coverage.duplicated.slice(0, 5).join(", ")}`);
     // A model that stops answering (billing, auth, rate limits) would make the rest of the run
     // measure template text, so stop and keep what ran.
@@ -323,8 +339,6 @@ async function benchCmd(v: Values, config: Config) {
     }
   }
 
-  const out = resolve(str(v, "out") ?? join("bench", dir.split("/").pop()!));
-  mkdirSync(out, { recursive: true });
   writeFileSync(join(out, "bench.json"), JSON.stringify(rows, null, 2));
   if (rows.length) {
     const cols = Object.keys(rows[0]);

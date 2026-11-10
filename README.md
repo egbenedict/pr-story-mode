@@ -160,7 +160,7 @@ Answers cite lines as `[L12]`, `[old L12]` or `[D1 L3-5]`. Citations of lines th
 | `<PR URL>` or `story <PR URL>` | Write a story for a GitHub PR |
 | `story --repo <dir> --base <ref> --head <ref>` | Write a story for a local branch diff |
 | `atoms <PR URL>` or `atoms --repo … --base … --head …` | Print change atoms and dependency edges (for debugging) |
-| `bench --repo <dir> [--count 20] [--mode merges\|commits]` | Run the pipeline over recent PRs and check coverage. With a model it records tokens and cost per PR, and stops at the first model failure (exit code 3) |
+| `bench --repo <dir> [--count 20] [--mode merges\|commits]` | Run the pipeline over recent PRs and check coverage. With a model it records tokens and cost per PR, and stops at the first model failure (exit code 3). `--shas a,b,…` runs exactly those commits. Each story is saved in `<out>/stories/`, and the results include words per step, words per changed line and beats per step |
 
 | Option | |
 |---|---|
@@ -291,7 +291,7 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ### Commands
 
 ```bash
-npm test                  # 124 tests
+npm test                  # 141 tests
 npm run typecheck
 npm run build             # extension and CLI
 npm run build:extension   # packages/extension/dist

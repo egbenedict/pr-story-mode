@@ -3,6 +3,7 @@ import { classifyAtoms } from "./classify";
 import { retrieveContext, type ContextSource } from "./context";
 import { explainSteps } from "./explain";
 import { buildGraph, type Edge } from "./graph";
+import type { Detail } from "./length";
 import { orderAtoms, type OrderEvent, type OrderResult } from "./order";
 import type { ParserHost } from "./parse";
 import { planFromPrevious, withNewContext, type PreviousStory } from "./reuse";
@@ -52,6 +53,9 @@ export type PipelineMetrics = {
   missingExplanations: number;
   beats: number;
   badCuts: number;
+  /** Words the model wrote in explanations, and the steps it explained (for words per step). */
+  words: number;
+  explainedSteps: number;
   tokens: number;
   usage: Required<Usage>;
   ms: { atomize: number; order: number; context: number; explain: number; firstStep: number | null; total: number };
@@ -82,6 +86,8 @@ export async function runPipeline(
      * its code is unchanged, its order is kept and only steps with changed code are explained again.
      */
     previous?: PreviousStory | null;
+    /** How much the explanations say (default standard). */
+    detail?: Detail;
   },
 ): Promise<PipelineResult> {
   const t0 = Date.now();
@@ -137,6 +143,7 @@ export async function runPipeline(
     ctx.context,
     reused,
     (index, text) => emit({ type: "draft", index, text }),
+    { detail: opts.detail },
   );
   const tExplain = Date.now();
 
@@ -192,6 +199,8 @@ export async function runPipeline(
       missingExplanations: stats.missingSteps,
       beats: stats.beats,
       badCuts: stats.badCuts,
+      words: stats.words,
+      explainedSteps: stats.explainedSteps,
       tokens: story.meta.tokens,
       usage,
       ms: { atomize: tAtoms - t0, order: tOrder - tAtoms, context: tContext - tOrder, explain: tExplain - tContext, firstStep, total: Date.now() - t0 },

@@ -89,6 +89,20 @@ export function listCommits(repo: string, n: number): { sha: string; subject: st
   return parseLog(out);
 }
 
+/** The given commits, in the given order, each marked as a merge (two parents) or not. */
+export function listShas(repo: string, shas: string[]): { sha: string; subject: string; body: string; merge: boolean }[] {
+  if (!shas.length) return [];
+  const out = git(repo, "log", "--no-walk=unsorted", "--format=%H%x1f%s%x1f%b%x1f%P%x1e", ...shas);
+  return out
+    .split("\x1e")
+    .map((r) => r.trim())
+    .filter(Boolean)
+    .map((r) => {
+      const [sha, subject, body, parents] = r.split("\x1f");
+      return { sha, subject, body: body ?? "", merge: (parents ?? "").trim().split(/\s+/).length > 1 };
+    });
+}
+
 function parseLog(out: string) {
   return out
     .split("\x1e")
