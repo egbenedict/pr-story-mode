@@ -277,6 +277,36 @@ describe("explanation length", () => {
   });
 });
 
+describe("line links in explanations", () => {
+  it("keeps a citation's phrase only if the text contains it, and renders phrases as links with the rest as chips", async () => {
+    const { clamp, run, fmt } = await setup();
+    const explain = (req: CompletionRequest) => {
+      const content = req.messages[0].content;
+      const line = (id: string) => +new RegExp(`Atom ${id}:[\\s\\S]*?^\\s+(\\d+) \\+ `, "m").exec(content)![1];
+      const beat = (id: string, text: string, cites: { phrase: string }[]) => ({
+        text,
+        cites: cites.map((c) => ({ atomId: id, start: line(id), end: line(id), ...c })),
+        throughAtomId: "",
+        throughLine: 0,
+      });
+      return JSON.stringify({
+        steps: [
+          { step: 1, beats: [beat(clamp, "Here we cap the value with `Math.min`.", [{ phrase: "cap the value" }, { phrase: "" }, { phrase: "not in the text" }])] },
+          { step: 2, beats: [beat(run, "We then return the clamped value.", [{ phrase: "return the clamped value" }])] },
+        ],
+      });
+    };
+    const provider = new MockProvider([plan([{ atomIds: [clamp], label: "Add clamp" }, { atomIds: [run], label: "Use clamp in run" }], [fmt]), explain]);
+    const r = await runPipeline(pr, { host, provider });
+    expect(r.story.steps[0].explanation[0].cites.map((c) => c.phrase)).toEqual(["cap the value", undefined, undefined]);
+    const html = renderStoryHtml(pr, r);
+    expect(html).toMatch(/Here we <a class="cite-link" href="#atom-[^"]+" data-atom="[^"]+" data-from="\d+" data-to="\d+" title="Show L\d+">cap the value<\/a> with <code>Math.min<\/code>\./);
+    expect(html).toMatch(/We then <a class="cite-link"[^>]*>return the clamped value<\/a>\.<\/p>/);
+    // The two citations without a usable phrase stay as chips after the text.
+    expect(html).toMatch(/<code>Math.min<\/code>\. <span class="cites">(<a class="cite"[^>]*>L\d+<\/a>){2}<\/span>/);
+  });
+});
+
 describe("reusing the previous story after a push", () => {
   const header = "// header\n// more\n// lines\n\n";
   const util1 = `${header}export const x = 1;\n`;

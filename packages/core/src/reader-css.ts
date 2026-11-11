@@ -57,6 +57,10 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .cites { white-space: nowrap; }
 .cite { font: 11px var(--mono); text-decoration: none; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 2px; color: var(--muted); }
 .cite:hover { color: var(--accent); border-color: var(--accent); }
+/* A phrase in an explanation that links to the lines it talks about. */
+.cite-link { color: inherit; text-decoration: underline dotted color-mix(in srgb, var(--accent) 70%, transparent); text-decoration-thickness: 1.5px; text-underline-offset: 3px; cursor: pointer; }
+.cite-link:hover { color: var(--accent); text-decoration-style: solid; }
+.cite-link.ctx { text-decoration-style: dashed; }
 .override { font-size: 13px; color: var(--muted); border-left: 2px solid var(--accent); padding-left: 10px; max-width: 72ch; }
 .atom { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 10px 0 0; overflow: hidden; }
 .atom-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }

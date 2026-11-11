@@ -70,7 +70,13 @@ export type ChangeAtom = {
  * A citation points at lines of a change atom (shown line numbers), or at lines of an unchanged
  * context snippet (`file` set, head line numbers; `atomId` is then empty).
  */
-export type Citation = { atomId: string; lines: [number, number]; file?: string };
+export type Citation = {
+  atomId: string;
+  lines: [number, number];
+  file?: string;
+  /** The words in the explanation that refer to these lines; readers make them a link. */
+  phrase?: string;
+};
 
 /**
  * Unchanged code shown alongside a step: a definition the step uses, an existing caller of

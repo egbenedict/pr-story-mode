@@ -6,6 +6,7 @@ import {
   expandChunk,
   fileRows,
   lineCounts,
+  linkPhrases,
   reindentRuns,
   rowNumber,
   rowPositions,
@@ -63,8 +64,20 @@ export function Inline({ text }: { text: string }) {
   return <>{parts.map((p, i) => (i % 2 ? <code key={i}>{p}</code> : p))}</>;
 }
 
-/** Model text → paragraphs, with "- item" lines as a list. `tail` goes at the end of the last paragraph. */
-function Blocks({ text, tail }: { text: string; tail?: ReactNode }) {
+/** Line links inside model text: each citation's phrase becomes a link; the rest go in the tail. */
+type TextLinks = { cites: Citation[]; link: (cite: Citation, children: ReactNode, key: number) => ReactNode; rest: (cites: Citation[]) => ReactNode };
+
+/** One paragraph or list item, with its citation phrases linked. */
+function linked(text: string, links: TextLinks | undefined, used: Set<number>): ReactNode {
+  if (!links) return <Inline text={text} />;
+  return linkPhrases(text, links.cites, used).map((p, k) => (p.cite === undefined ? <Inline key={k} text={p.text} /> : links.link(links.cites[p.cite], <Inline text={p.text} />, k)));
+}
+
+/**
+ * Model text → paragraphs, with "- item" lines as a list. `tail` goes at the end of the last
+ * paragraph. With `links`, citation phrases become links and the citations left over form the tail.
+ */
+function Blocks({ text, tail, links }: { text: string; tail?: ReactNode; links?: TextLinks }) {
   const out: ({ kind: "p"; text: string } | { kind: "ul"; items: string[] })[] = [];
   let para: string[] = [];
   let list: string[] = [];
@@ -93,20 +106,25 @@ function Blocks({ text, tail }: { text: string; tail?: ReactNode }) {
   flushPara();
   flushList();
   const last = out[out.length - 1];
+  // Place links paragraph by paragraph, in reading order, before deciding what's left for the tail.
+  const used = new Set<number>();
+  const rendered = out.map((b) => (b.kind === "p" ? linked(b.text, links, used) : b.items.map((li) => linked(li, links, used))));
+  if (links) {
+    const rest = links.cites.filter((_, k) => !used.has(k));
+    tail = rest.length ? links.rest(rest) : tail;
+  }
   return (
     <>
       {out.map((b, i) =>
         b.kind === "p" ? (
           <p key={i}>
-            <Inline text={b.text} />
+            {rendered[i]}
             {i === out.length - 1 && tail ? <> {tail}</> : null}
           </p>
         ) : (
           <ul key={i}>
-            {b.items.map((li, j) => (
-              <li key={j}>
-                <Inline text={li} />
-              </li>
+            {(rendered[i] as ReactNode[]).map((li, j) => (
+              <li key={j}>{li}</li>
             ))}
           </ul>
         ),
@@ -116,11 +134,14 @@ function Blocks({ text, tail }: { text: string; tail?: ReactNode }) {
   );
 }
 
-function inRange(r: SnippetRow, from: number, to: number): boolean {
+/**
+ * A row a citation points at: by the number shown beside it, or, with `old`, by a re-indented
+ * row's old number (used only when no row of the atom matches by its shown number).
+ */
+function inRange(r: SnippetRow, from: number, to: number, old = false): boolean {
   if (r.type === "gap") return false;
-  const n = rowNumber(r);
-  const o = r.type === "reindent" ? r.oldLine : undefined;
-  return (n != null && n >= from && n <= to) || (o != null && o >= from && o <= to);
+  const n = old ? (r.type === "reindent" ? r.oldLine : undefined) : rowNumber(r);
+  return n != null && n >= from && n <= to;
 }
 
 /** `ask`: the row can be selected to ask about (rows of the story's own chunks). */
@@ -249,9 +270,11 @@ type ExpandProps = {
 };
 
 function DiffTable({ atomId, rows, cls, step, extra, top, bottom, gapControl }: { atomId: string; rows: SnippetRow[]; cls: string; step: number } & ExpandProps) {
-  const { hl, byId } = useContext(StoryCtx);
+  const { hl, byId, snippets } = useContext(StoryCtx);
   const path = byId.get(atomId)?.file;
-  const isHl = (r: SnippetRow) => !!hl && hl.step === step && hl.atomId === atomId && cls === "story" && inRange(r, hl.from, hl.to);
+  const hlHere = !!hl && hl.step === step && hl.atomId === atomId && cls === "story";
+  const byOld = hlHere && !(snippets.get(atomId) ?? []).some((r) => inRange(r, hl!.from, hl!.to));
+  const isHl = (r: SnippetRow) => hlHere && inRange(r, hl!.from, hl!.to, byOld);
   const clsOf = (r: SnippetRow) => (extra?.has(r) ? (r.type === "context" ? "extra" : "other") : undefined);
   // The story's chunks can be asked about; raw diffs can't (they're for checking against GitHub).
   const ask = cls === "story" ? { step, atomId } : undefined;
@@ -453,18 +476,37 @@ function ChunkBlock({ c, step, taken }: { c: WalkChunk; step: number; taken?: Se
   );
 }
 
-function Cites({ cites, step, onCite }: { cites: Citation[]; step: number; onCite: () => void }) {
+const citeRange = (c: Citation) => (c.lines[0] === c.lines[1] ? `L${c.lines[0]}` : `L${c.lines[0]}–${c.lines[1]}`);
+
+/** Highlight and scroll to a citation's lines. */
+function useCiteClick(step: number, onCite: () => void) {
   const { setHl } = useContext(StoryCtx);
+  return (c: Citation) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    onCite();
+    setHl(c.file ? { step, file: c.file, from: c.lines[0], to: c.lines[1] } : { step, atomId: c.atomId, from: c.lines[0], to: c.lines[1] });
+  };
+}
+
+/** A phrase in an explanation that links to the lines it talks about. */
+function CiteLink({ c, step, onCite, children }: { c: Citation; step: number; onCite: () => void; children: ReactNode }) {
+  const click = useCiteClick(step, onCite);
+  const where = c.file ? `${c.file.split("/").pop()} ${citeRange(c)} (unchanged code)` : citeRange(c);
+  return (
+    <a className={`cite-link${c.file ? " ctx" : ""}`} href={c.file ? "#" : `#atom-${c.atomId}`} onClick={click(c)} title={`Show ${where}`}>
+      {children}
+    </a>
+  );
+}
+
+function Cites({ cites, step, onCite }: { cites: Citation[]; step: number; onCite: () => void }) {
+  const clickFor = useCiteClick(step, onCite);
   if (!cites.length) return null;
   return (
     <span className="cites">
       {cites.map((c, i) => {
-        const range = c.lines[0] === c.lines[1] ? `L${c.lines[0]}` : `L${c.lines[0]}–${c.lines[1]}`;
-        const click = (e: React.MouseEvent) => {
-          e.preventDefault();
-          onCite();
-          setHl(c.file ? { step, file: c.file, from: c.lines[0], to: c.lines[1] } : { step, atomId: c.atomId, from: c.lines[0], to: c.lines[1] });
-        };
+        const range = citeRange(c);
+        const click = clickFor(c);
         return c.file ? (
           <a key={i} className="cite ctx" href="#" onClick={click} title={`Unchanged code in ${c.file}`}>
             {c.file.split("/").pop()} {range}
@@ -581,7 +623,18 @@ function Step({ i, step, done }: { i: number; step: StoryStep; done: boolean }) 
             <div className="beat" key={k}>
               {b.text || b.cites.length ? (
                 <div className="beat-text">
-                  <Blocks text={b.text} tail={<Cites cites={b.cites} step={i} onCite={() => setRaw(false)} />} />
+                  <Blocks
+                    text={b.text}
+                    links={{
+                      cites: b.cites,
+                      link: (c, children, key) => (
+                        <CiteLink key={key} c={c} step={i} onCite={() => setRaw(false)}>
+                          {children}
+                        </CiteLink>
+                      ),
+                      rest: (rest) => <Cites cites={rest} step={i} onCite={() => setRaw(false)} />,
+                    }}
+                  />
                 </div>
               ) : null}
               {b.code.map((c, j) => (

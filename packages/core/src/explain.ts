@@ -30,7 +30,7 @@ How beats work:
 - Each step's heading gives a rough word count for its explanation, scaled to the size of its change. It is a target, not a quota: write less when the code is simple.
 - Lines marked \`~\` changed only in indentation. Say so in a short clause instead of explaining them again.
 - Write plain sentences: no headings, bullet lists or dramatic framing. Put identifiers, flags, file names and literal values in backticks.
-- \`cites\` lists the lines a beat discusses, as the atom ID with the first and last line number. Cite only atoms shown in this request.
+- \`cites\` lists the lines a beat discusses, as the atom ID with the first and last line number. Cite only atoms shown in this request. Set each citation's \`phrase\` to the words in your text that refer to those lines, copied exactly (a few words, such as "count matches with \`memchr\`"); the reader turns that phrase into a link to the lines. Cite the specific lines each phrase is about, so a sentence that walks through several parts of the code links each part.
 - Some steps come with unchanged code the PR did not touch, labeled C1, C2 and so on: a definition the step uses, an existing caller of something the step changes, or the class the code sits in. The reader sees it just above the step. Use it where it explains the change, for example what a called helper returns or which existing callers a new behavior reaches, and cite it with its label (\`atomId\` "C2") and its line numbers. In your text, refer to that code by name, never by its label. Don't walk through the context itself, and never end a beat on a context line. In context, \`>\` marks the lines that mention the linking symbol, and a line followed by \`…\` is the opening line of the code the snippet comes from.`;
 
 export const EXPLAIN_SCHEMA: JSONSchema = {
@@ -59,8 +59,8 @@ export const EXPLAIN_SCHEMA: JSONSchema = {
                   items: {
                     type: "object",
                     additionalProperties: false,
-                    required: ["atomId", "start", "end"],
-                    properties: { atomId: { type: "string" }, start: { type: "integer" }, end: { type: "integer" } },
+                    required: ["atomId", "start", "end", "phrase"],
+                    properties: { atomId: { type: "string" }, start: { type: "integer" }, end: { type: "integer" }, phrase: { type: "string" } },
                   },
                 },
                 throughAtomId: { type: "string" },
@@ -212,15 +212,17 @@ export async function explainSteps(
           }
           const cites: Citation[] = [];
           for (const c of Array.isArray(o.cites) ? o.cites : []) {
-            const { atomId, start, end } = c as { atomId?: unknown; start?: unknown; end?: unknown };
+            const { atomId, start, end, phrase } = c as { atomId?: unknown; start?: unknown; end?: unknown; phrase?: unknown };
+            // The phrase must appear in the beat's text to become a link.
+            const words = typeof phrase === "string" && phrase.trim() && typeof o.text === "string" && o.text.includes(phrase.trim()) ? { phrase: phrase.trim() } : {};
             stats.citations++;
             const range = typeof atomId === "string" ? allowed.get(atomId) : undefined;
             const snip = typeof atomId === "string" ? ctxAllowed.get(atomId) : undefined;
             const ok = (lo: number, hi: number) => typeof start === "number" && typeof end === "number" && start <= end && start >= lo && end <= hi;
             if (range && ok(range[0], range[1])) {
-              cites.push({ atomId: atomId as string, lines: [start as number, end as number] });
+              cites.push({ atomId: atomId as string, lines: [start as number, end as number], ...words });
             } else if (snip && (ok(snip.start, snip.end) || (snip.head && start === snip.head.line && end === snip.head.line))) {
-              cites.push({ atomId: "", file: snip.file, lines: [start as number, end as number] });
+              cites.push({ atomId: "", file: snip.file, lines: [start as number, end as number], ...words });
             } else {
               stats.groundingFailures++;
             }

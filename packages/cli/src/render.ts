@@ -4,6 +4,7 @@ import {
   atomSnippet,
   contextCaption,
   lineCounts,
+  linkPhrases,
   READER_CSS,
   reindentRuns,
   walkthrough,
@@ -27,17 +28,26 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 /** Escape, then turn `code` spans into <code>. */
 const inline = (s: string) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>");
 
-/** Model text → paragraphs, with "- item" lines rendered as a list. `tail` is appended to the last block. */
-function blocks(text: string, tail = ""): string {
+/** Line links inside model text: each citation's phrase becomes a link; the rest go in the tail. */
+type TextLinks = { cites: Citation[]; link: (cite: Citation, html: string) => string; rest: (cites: Citation[]) => string };
+
+/**
+ * Model text → paragraphs, with "- item" lines rendered as a list. `tail` is appended to the last
+ * block. With `links`, citation phrases become links and the citations left over form the tail.
+ */
+function blocks(text: string, tail = "", links?: TextLinks): string {
   const out: string[] = [];
   let para: string[] = [];
   let list: string[] = [];
+  const used = new Set<number>();
+  const linked = (t: string) =>
+    links ? linkPhrases(t, links.cites, used).map((p) => (p.cite === undefined ? inline(p.text) : links.link(links.cites[p.cite], inline(p.text)))).join("") : inline(t);
   const flushPara = () => {
-    if (para.length) out.push(`<p>${inline(para.join(" "))}</p>`);
+    if (para.length) out.push(`<p>${linked(para.join(" "))}</p>`);
     para = [];
   };
   const flushList = () => {
-    if (list.length) out.push(`<ul>${list.map((li) => `<li>${inline(li)}</li>`).join("")}</ul>`);
+    if (list.length) out.push(`<ul>${list.map((li) => `<li>${linked(li)}</li>`).join("")}</ul>`);
     list = [];
   };
   for (const raw of text.split("\n")) {
@@ -56,6 +66,10 @@ function blocks(text: string, tail = ""): string {
   }
   flushPara();
   flushList();
+  if (links) {
+    const rest = links.cites.filter((_, k) => !used.has(k));
+    if (rest.length) tail = links.rest(rest);
+  }
   if (!out.length) return tail ? `<p>${tail}</p>` : "";
   if (tail) {
     const last = out[out.length - 1];
@@ -170,6 +184,14 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
     return `<div class="atom chunk${c.joined ? " joined" : ""}"${c.first ? ` id="atom-${atom.id}"` : ""}>${head}${diffTable(atom.id, c.rows, "story")}</div>`;
   };
 
+  /** A phrase in an explanation that links to the lines it talks about. */
+  const citeLink = (c: Citation, html: string) => {
+    const range = c.lines[0] === c.lines[1] ? `L${c.lines[0]}` : `L${c.lines[0]}–${c.lines[1]}`;
+    return c.file
+      ? `<a class="cite-link ctx" href="#" data-file="${esc(c.file)}" data-from="${c.lines[0]}" data-to="${c.lines[1]}" title="Show ${esc(c.file.split("/").pop() ?? "")} ${range} (unchanged code)">${html}</a>`
+      : `<a class="cite-link" href="#atom-${c.atomId}" data-atom="${c.atomId}" data-from="${c.lines[0]}" data-to="${c.lines[1]}" title="Show ${range}">${html}</a>`;
+  };
+
   const citeLinks = (cites: Citation[]) =>
     cites
       .map((c) => {
@@ -205,8 +227,11 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
       const { beats } = walkthrough(s, snippets, (id) => byId.get(id)?.file);
       const walk = beats
         .map((b) => {
-          const cites = citeLinks(b.cites);
-          const text = blocks(b.text, cites ? `<span class="cites">${cites}</span>` : "");
+          const text = blocks(b.text, "", {
+            cites: b.cites,
+            link: (c, html) => citeLink(c, html),
+            rest: (rest) => `<span class="cites">${citeLinks(rest)}</span>`,
+          });
           return `<div class="beat">${text ? `<div class="beat-text">${text}</div>` : ""}${b.code.map(chunkBlock).join("")}</div>`;
         })
         .join("");
@@ -321,7 +346,7 @@ ${mechanical}
   };
   for (const btn of document.querySelectorAll('.fold-btn')) btn.addEventListener('click', () => setFold(btn, btn.getAttribute('aria-expanded') !== 'true'));
 
-  for (const c of document.querySelectorAll('.cite')) c.addEventListener('click', (e) => {
+  for (const c of document.querySelectorAll('.cite, .cite-link')) c.addEventListener('click', (e) => {
     e.preventDefault();
     const step = c.closest('.step');
     step?.classList.remove('show-raw');
@@ -333,9 +358,12 @@ ${mechanical}
     const rows = c.dataset.file
       ? [...scope.querySelectorAll('table.ctx')].filter((t) => t.dataset.file === c.dataset.file).flatMap((t) => [...t.querySelectorAll('tr[data-n]')])
       : scope.querySelectorAll('.walk table.diff[data-atom="' + c.dataset.atom + '"] tr[data-n]');
+    // Match the numbers shown beside rows; fall back to old numbers only when none match.
+    const shown = (r) => +r.dataset.n >= from && +r.dataset.n <= to;
+    const byOld = ![...rows].some(shown);
     for (const r of rows) {
-      const n = +r.dataset.n, o = r.dataset.o ? +r.dataset.o : NaN;
-      if ((n >= from && n <= to) || (o >= from && o <= to)) {
+      const o = r.dataset.o ? +r.dataset.o : NaN;
+      if (byOld ? o >= from && o <= to : shown(r)) {
         r.classList.add('hl');
         first ??= r;
         const det = r.closest('details');
