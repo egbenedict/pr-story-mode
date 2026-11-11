@@ -119,6 +119,38 @@ describe("walkthrough", () => {
   });
 });
 
+describe("walkthrough chunking", () => {
+  const add = (n: number, text: string): SnippetRow => ({ type: "add", text, newLine: n });
+  const beat = (text: string, atomId?: string, line?: number) => ({ text, cites: [], ...(atomId ? { through: { atomId, line: line! } } : {}) });
+
+  it("keeps an atom's leftover lines in the block a beat already showed", () => {
+    const snippets = new Map([["a", [add(23, "x = 1"), add(24, "y = 2"), add(25, "z = 3"), add(26, "w = 4")]]]);
+    const w = walkthrough({ atomIds: ["a"], label: "x", explanation: [beat("first three", "a", 25)] }, snippets);
+    expect(w.beats[0].code).toHaveLength(1);
+    expect(w.beats[0].code[0].rows.map(rowNumber)).toEqual([23, 24, 25, 26]);
+  });
+
+  it("moves a cut past the closing bracket after it", () => {
+    const snippets = new Map([["a", [add(23, "if (x) {"), add(24, "  run();"), add(25, "  done();"), add(26, "}"), add(27, "next();")]]]);
+    const w = walkthrough({ atomIds: ["a"], label: "x", explanation: [beat("the branch", "a", 25), beat("then", "a", 27)] }, snippets);
+    expect(w.beats[0].code[0].rows.map(rowNumber)).toEqual([23, 24, 25, 26]);
+    expect(w.beats[1].code[0].rows.map(rowNumber)).toEqual([27]);
+  });
+
+  it("marks a chunk that carries straight on from the one above in the same file", () => {
+    const snippets = new Map([
+      ["a", [add(10, "const a = 1;")]],
+      ["b", [add(11, "function b() {}")]],
+      ["c", [add(30, "function c() {}")]],
+      ["d", [add(31, "const d = 1;")]],
+    ]);
+    const files: Record<string, string> = { a: "x.ts", b: "x.ts", c: "x.ts", d: "y.ts" };
+    const w = walkthrough({ atomIds: ["a", "b", "c", "d"], label: "x", explanation: [beat("all")] }, snippets, (id) => files[id]);
+    expect(w.beats[0].code.map((c) => !!c.joined)).toEqual([false, true, false, false]);
+    expect(walkthrough({ atomIds: ["a", "b"], label: "x", explanation: [beat("all")] }, snippets).beats[0].code.some((c) => c.joined)).toBe(false);
+  });
+});
+
 describe("expanding a chunk", () => {
   // 30 lines; lines 15 and 25 change.
   const head = Array.from({ length: 30 }, (_, i) => (i + 1 === 15 || i + 1 === 25 ? `X${i + 1}` : `l${i + 1}`)).join("\n") + "\n";

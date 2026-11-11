@@ -225,11 +225,13 @@ describe("staged ordering for large PRs", () => {
 });
 
 describe("explanation voice", () => {
-  it("tells the model it is not the author and to write in the third person", () => {
+  it("walks through with \"we\", never as the author, and without filler", () => {
     expect(EXPLAIN_SYSTEM).not.toMatch(/You wrote this pull request/);
     expect(EXPLAIN_SYSTEM).toContain("You did not write the pull request");
-    expect(EXPLAIN_SYSTEM).toContain("third person");
-    expect(EXPLAIN_SYSTEM).toMatch(/Never use "I", "we"/);
+    expect(EXPLAIN_SYSTEM).toContain('using "we"');
+    expect(EXPLAIN_SYSTEM).toMatch(/Never use "I", "my" or "our"/);
+    expect(EXPLAIN_SYSTEM).toContain("No filler");
+    expect(EXPLAIN_SYSTEM).toContain("refer to that code by name, never by its label");
   });
 });
 
@@ -264,8 +266,13 @@ describe("explanation length", () => {
     expect(ORDER_SYSTEM).not.toMatch(/A step is usually one atom|how many steps suit/);
   });
 
+  it("tells the planner to keep neighbouring code together and the explainer to cut only between whole statements", () => {
+    expect(ORDER_SYSTEM).toContain("Keep code that sits together in a file together");
+    expect(EXPLAIN_SYSTEM).toContain("Cut only at the end of a whole statement or block");
+  });
+
   it("tells the model not to restate the code and not to split beats by a line count", () => {
-    expect(EXPLAIN_SYSTEM).toContain("don't restate what the code plainly says");
+    expect(EXPLAIN_SYSTEM).toContain("Skip lines that need no explanation");
     expect(EXPLAIN_SYSTEM).not.toMatch(/5 to 25 lines per beat/);
   });
 });

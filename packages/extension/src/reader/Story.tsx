@@ -373,9 +373,16 @@ function rawRows(atom: ChangeAtom, file: PRInput["files"][number] | undefined): 
   return rows;
 }
 
-function AtomHead({ atom, continued, extra }: { atom: ChangeAtom; continued: boolean; extra?: ReactNode }) {
+function AtomHead({ atom, continued, joined, extra }: { atom: ChangeAtom; continued: boolean; joined?: boolean; extra?: ReactNode }) {
   const { link } = useContext(StoryCtx);
   const sym = atomLabel(atom).slice(atom.file.length).replace(/^ › /, "");
+  // Straight on from the code above, in the same file: name the new symbol, nothing more.
+  if (joined)
+    return sym ? (
+      <div className="atom-head joined-head">
+        <span className="sym">{sym}</span>
+      </div>
+    ) : null;
   if (continued)
     return (
       <div className="atom-head cont">
@@ -439,8 +446,8 @@ function ChunkBlock({ c, step, taken }: { c: WalkChunk; step: number; taken?: Se
   const ex = useExpand(atom, c.rows, taken);
   if (!atom) return null;
   return (
-    <div className="atom chunk" id={c.first ? `atom-${atom.id}` : undefined}>
-      <AtomHead atom={atom} continued={!c.first} />
+    <div className={`atom chunk${c.joined ? " joined" : ""}`} id={c.first ? `atom-${atom.id}` : undefined}>
+      <AtomHead atom={atom} continued={!c.first} joined={c.joined} />
       <DiffTable atomId={atom.id} cls="story" step={step} {...ex} />
     </div>
   );
@@ -531,7 +538,7 @@ function Step({ i, step, done }: { i: number; step: StoryStep; done: boolean }) 
   const { byId, snippets, files, fileView } = useContext(StoryCtx);
   const [raw, setRaw] = useState(false);
   const stepAtoms = step.atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
-  const { beats } = useMemo(() => walkthrough(step, snippets), [step, snippets]);
+  const { beats } = useMemo(() => walkthrough(step, snippets, (id) => byId.get(id)?.file), [step, snippets, byId]);
   // Per file, the lines this step's chunks already show, so expanding one chunk stops at the next.
   const taken = useMemo(() => {
     const m = new Map<string, Set<number>>();

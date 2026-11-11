@@ -14,7 +14,7 @@ import { unitSymbols } from "./symbols";
 
 /** Where a changed line lives in the syntax tree. */
 type Location =
-  | { kind: "unit"; path: string[]; named: boolean; node: Node; start: number; end: number }
+  | { kind: "unit"; path: string[]; named: boolean; node: Node; start: number; end: number; block: boolean }
   | { kind: "import"; path: string[]; node: Node }
   | { kind: "leading" } // comment/decorator: attaches to the next atom
   | { kind: "none" }; // blank or between units: attaches to a neighbour
@@ -24,6 +24,10 @@ type Group = {
   path: string[];
   named: boolean;
   isImport: boolean;
+  /** A function or class: always its own atom, never merged with its neighbours. */
+  block?: boolean;
+  /** For a joined run of declarations, the name of each one. */
+  joinedNames?: string[];
   lines: DiffLineRef[];
   baseNodes: Node[];
   headNodes: Node[];
@@ -147,6 +151,7 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
       const anon = file.status === "added" || file.status === "removed" ? `<stmt ${loc.start}>` : `<hunk ${line.hunk}>`;
       const key = loc.named ? loc.path.join(".") : [...loc.path, anon].join(".");
       addToGroup(groups, key, loc.path, loc.named, false, line, loc.node, loc.start, loc.end);
+      if (loc.block) groups.get(key)!.block = true;
       return key;
     }
     if (loc.kind === "import") {
@@ -184,14 +189,13 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
     keyOf[i] = target ?? `<hunk ${hunk}>`;
   }
 
-  // 3. Turn groups into atoms.
+  // 3. Turn groups into atoms, after joining runs of small adjacent declarations.
   const out: ChangeAtom[] = [];
-  for (const g of groups.values()) {
+  for (const g of mergeDeclarationRuns([...groups.values()])) {
     const defines: string[] = [];
-    if (g.named && !g.isImport) {
-      const last = g.path[g.path.length - 1];
-      if (last && /^[\w$.#:~]+$/.test(last)) defines.push(last.replace(/^.*(\.|::)/, ""));
-    }
+    if (g.named && !g.isImport)
+      for (const name of g.joinedNames ?? [g.path[g.path.length - 1]])
+        if (name && /^[\w$.#:~]+$/.test(name)) defines.push(name.replace(/^.*(\.|::)/, ""));
     let refs = new Set<string>();
     if (pack && tier > 0) {
       const nodes = g.headNodes.length ? g.headNodes : g.baseNodes;
@@ -202,7 +206,11 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
     }
     // A member is also known by its class, so `this.m()` / `self.m()` links only to the class's own `m`.
     const owner = g.path.length >= 2 ? g.path[g.path.length - 2] : null;
-    if (g.named && !g.isImport && defines.length && owner && /^[\w$]+$/.test(owner)) defines.push(`${owner}.${defines[0]}`);
+    if (g.named && !g.isImport && defines.length && owner && /^[\w$]+$/.test(owner)) {
+      // A joined run of fields defines each of them on the class.
+      const own = g.joinedNames ? [...defines] : [defines[0]];
+      for (const d of own) defines.push(`${owner}.${d}`);
+    }
     for (const d of defines) refs.delete(d);
 
     out.push({
@@ -229,7 +237,7 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
 function locate(root: Node, row: number, pack: LanguagePack): Location {
   const path: string[] = [];
   let node: Node = root;
-  let unit: { node: Node; start: number; end: number; named: boolean; path: string[] } | null = null;
+  let unit: { node: Node; start: number; end: number; named: boolean; path: string[]; block?: boolean } | null = null;
   let wrapperStart: number | null = null;
 
   for (;;) {
@@ -261,7 +269,7 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
     if (pack.isClassLike(t)) {
       const name = nameOf(child) ?? `<${t}>`;
       path.push(name);
-      unit = { node: child, start, end: child.endPosition.row + 1, named: true, path: [...path] };
+      unit = { node: child, start, end: child.endPosition.row + 1, named: true, path: [...path], block: true };
       const body = child.childForFieldName("body") ?? child.namedChildren.find((c) => c && pack.isBody(c.type)) ?? null;
       if (body && body.startPosition.row <= row && row <= body.endPosition.row) {
         node = body;
@@ -272,7 +280,7 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
 
     if (pack.isFunctionLike(t)) {
       const name = nameOf(child) ?? "<anonymous>";
-      unit = { node: child, start, end: child.endPosition.row + 1, named: true, path: [...path, name] };
+      unit = { node: child, start, end: child.endPosition.row + 1, named: true, path: [...path, name], block: true };
       break;
     }
 
@@ -285,8 +293,72 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
   return unit ? unitLocation(unit) : { kind: "none" };
 }
 
-function unitLocation(u: { node: Node; start: number; end: number; named: boolean; path: string[] }): Location {
-  return { kind: "unit", path: u.path, named: u.named, node: u.node, start: u.start, end: u.end };
+function unitLocation(u: { node: Node; start: number; end: number; named: boolean; path: string[]; block?: boolean }): Location {
+  return { kind: "unit", path: u.path, named: u.named, node: u.node, start: u.start, end: u.end, block: !!u.block };
+}
+
+/** A declaration this long or shorter can join its neighbours. */
+export const MERGE_MAX_LINES = 8;
+
+/**
+ * Join runs of small declarations that sit next to each other in the same scope (consts, fields,
+ * assignments, short statements) into one group, so three changed lines and the one below them
+ * read as one piece of code. Functions, classes and imports stay on their own.
+ */
+function mergeDeclarationRuns(groups: Group[]): Group[] {
+  const range = (g: Group) => g.headRange ?? g.baseRange;
+  const small = (g: Group) => {
+    const r = range(g);
+    return !g.block && !g.isImport && !!r && r.end - r.start + 1 <= MERGE_MAX_LINES;
+  };
+  const scope = (g: Group) => (g.named ? g.path.slice(0, -1) : g.path).join("\u0000");
+  const adjacent = (a: Group, b: Group) => {
+    const side = a.headRange && b.headRange ? "headRange" : !a.headRange && !b.headRange && a.baseRange && b.baseRange ? "baseRange" : null;
+    if (!side) return false;
+    const gap = b[side]!.start - a[side]!.end - 1;
+    return gap >= 0 && gap <= 1;
+  };
+  const sorted = [...groups].sort((a, b) => (range(a)?.start ?? Infinity) - (range(b)?.start ?? Infinity));
+  const out: Group[] = [];
+  let run: Group[] = [];
+  const flush = () => {
+    if (run.length === 1) out.push(run[0]);
+    else if (run.length > 1) out.push(joinGroups(run));
+    run = [];
+  };
+  for (const g of sorted) {
+    const prev = run[run.length - 1];
+    if (prev && small(g) && scope(prev) === scope(g) && adjacent(prev, g)) run.push(g);
+    else {
+      flush();
+      if (small(g)) run.push(g);
+      else out.push(g);
+    }
+  }
+  flush();
+  return out;
+}
+
+function joinGroups(run: Group[]): Group {
+  const names = run.filter((g) => g.named).map((g) => g.path[g.path.length - 1]!);
+  const scope = run[0].named ? run[0].path.slice(0, -1) : run[0].path;
+  const label = names.length === 0 ? null : names.length <= 3 ? names.join(", ") : `${names[0]}, …, ${names[names.length - 1]}`;
+  const span = (pick: (g: Group) => { start: number; end: number } | undefined) => {
+    const rs = run.map(pick).filter((r): r is { start: number; end: number } => !!r);
+    return rs.length ? { start: Math.min(...rs.map((r) => r.start)), end: Math.max(...rs.map((r) => r.end)) } : undefined;
+  };
+  return {
+    key: run.map((g) => g.key).join(" + "),
+    path: label ? [...scope, label] : scope,
+    named: !!label,
+    isImport: false,
+    lines: run.flatMap((g) => g.lines),
+    baseNodes: run.flatMap((g) => g.baseNodes),
+    headNodes: run.flatMap((g) => g.headNodes),
+    baseRange: span((g) => g.baseRange),
+    headRange: span((g) => g.headRange),
+    joinedNames: names,
+  };
 }
 
 function childAt(node: Node, row: number): Node | null {

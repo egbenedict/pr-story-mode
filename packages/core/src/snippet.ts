@@ -196,17 +196,29 @@ function line(r: LineRow): string {
 
 // ---------- walkthrough: interleaving explanation beats with the code they cover ----------
 
-export type WalkChunk = { atomId: string; rows: SnippetRow[]; first: boolean };
+/**
+ * Code shown after a beat. `joined` marks a chunk that carries straight on from the chunk before it
+ * in the same beat (same file, the next lines), so readers draw the two as one block.
+ */
+export type WalkChunk = { atomId: string; rows: SnippetRow[]; first: boolean; joined?: boolean };
 export type WalkBeat = { text: string; cites: Citation[]; code: WalkChunk[] };
 
 /**
  * Cut each atom's snippet at the beats' `through` points, so every beat is followed by exactly the
  * lines it covers. Each row is shown once: rows no beat reached are added after the last beat.
- * A cut point that does not match a shown line snaps to the nearest one after the previous cut.
+ * A cut point that does not match a shown line snaps to the nearest one after the previous cut, and
+ * a cut moves past closing brackets right after it, so a lone \`}\` never starts the next chunk.
+ * Rows left over at the end join the atom's last chunk instead of trailing in a box of their own.
+ * With \`fileOf\`, chunks that continue straight on in the same file are marked \`joined\`.
  */
-export function walkthrough(step: StoryStep, snippets: Map<string, SnippetRow[]>): { beats: WalkBeat[]; snapped: number } {
+export function walkthrough(
+  step: StoryStep,
+  snippets: Map<string, SnippetRow[]>,
+  fileOf?: (atomId: string) => string | undefined,
+): { beats: WalkBeat[]; snapped: number } {
   const cursor = new Map<string, number>(step.atomIds.map((id) => [id, 0]));
   const started = new Set<string>();
+  const latest = new Map<string, WalkChunk>();
   let snapped = 0;
 
   const take = (atomId: string, end: number): WalkChunk | null => {
@@ -222,7 +234,9 @@ export function walkthrough(step: StoryStep, snippets: Map<string, SnippetRow[]>
     if (!slice.length) return null;
     const first = !started.has(atomId);
     started.add(atomId);
-    return { atomId, rows: slice, first };
+    const chunk: WalkChunk = { atomId, rows: slice, first };
+    latest.set(atomId, chunk);
+    return chunk;
   };
 
   const beats: WalkBeat[] = step.explanation.map((e) => ({ text: e.text, cites: e.cites, code: [] }));
@@ -254,7 +268,7 @@ export function walkthrough(step: StoryStep, snippets: Map<string, SnippetRow[]>
       }
       if (idx < 0) return;
     }
-    const chunk = take(atomId, keepReplacement(rows, idx, line));
+    const chunk = take(atomId, pastClosers(rows, keepReplacement(rows, idx, line)));
     if (chunk) beats[i].code.push(chunk);
   });
 
@@ -263,12 +277,69 @@ export function walkthrough(step: StoryStep, snippets: Map<string, SnippetRow[]>
   const last = beats[beats.length - 1];
   for (const id of step.atomIds) {
     const rows = snippets.get(id) ?? [];
-    if (cursor.get(id)! < rows.length) {
-      const chunk = take(id, rows.length - 1);
-      if (chunk) last.code.push(chunk);
+    const from = cursor.get(id)!;
+    if (from >= rows.length) continue;
+    // The rest of an atom a beat already showed carries on in that beat's block.
+    const prev = latest.get(id);
+    if (prev) {
+      let rest = rows.slice(from);
+      while (rest[rest.length - 1]?.type === "gap") rest = rest.slice(0, -1);
+      if (rest.some((r) => r.type !== "gap")) prev.rows = [...prev.rows, ...rest];
+      cursor.set(id, rows.length);
+      continue;
     }
+    const chunk = take(id, rows.length - 1);
+    if (chunk) last.code.push(chunk);
   }
+  if (fileOf)
+    for (const b of beats)
+      b.code.forEach((c, k) => {
+        const before = b.code[k - 1];
+        if (!before || before.atomId === c.atomId || fileOf(before.atomId) !== fileOf(c.atomId)) return;
+        // Unchanged lines around two neighbouring atoms overlap: show them once, in the first block.
+        const rows = withoutShared(before.rows, c.rows);
+        if (rows.length && follows(before.rows, rows)) {
+          c.rows = rows;
+          c.joined = true;
+        }
+      });
   return { beats, snapped };
+}
+
+/** \`b\` without the leading unchanged lines that \`a\` already shows. */
+function withoutShared(a: SnippetRow[], b: SnippetRow[]): SnippetRow[] {
+  const shown = new Set(a.flatMap((r) => (r.type === "context" && r.newLine !== undefined ? [r.newLine] : [])));
+  let k = 0;
+  while (k < b.length && (b[k].type === "gap" || (b[k].type === "context" && shown.has((b[k] as LineRow).newLine!)))) k++;
+  return k === 0 ? b : b.slice(k);
+}
+
+/** Closing brackets and \`end\`-style lines belong with the code they close. */
+const CLOSER = /^\s*(?:[)\]}>]+[;,)]*|end|fi|done|esac|endif|#endif)\s*[;,]?\s*$/;
+
+function pastClosers(rows: SnippetRow[], end: number): number {
+  let k = end;
+  while (k + 1 < rows.length) {
+    const r = rows[k + 1];
+    if (r.type === "gap" || !CLOSER.test(r.text)) break;
+    k++;
+  }
+  return k === end ? end : keepReplacement(rows, k, rowNumber(rows[k]) ?? 0);
+}
+
+/** True when \`b\` starts on the line after \`a\` ends (one blank line between is allowed). */
+function follows(a: SnippetRow[], b: SnippetRow[]): boolean {
+  const side = (rows: SnippetRow[], pick: (ns: number[]) => number) => {
+    const head = rows.flatMap((r) => (r.type !== "gap" && r.type !== "del" && r.newLine !== undefined ? [r.newLine] : []));
+    const base = rows.flatMap((r) => (r.type !== "gap" && r.oldLine !== undefined ? [r.oldLine] : []));
+    return { head: head.length ? pick(head) : undefined, base: base.length ? pick(base) : undefined };
+  };
+  const end = side(a, (ns) => Math.max(...ns));
+  const start = side(b, (ns) => Math.min(...ns));
+  const near = (x?: number, y?: number) => x !== undefined && y !== undefined && y - x >= 1 && y - x <= 2;
+  // Compare new-file lines when both have them, else old-file lines (a deletion has only those).
+  if (end.head !== undefined && start.head !== undefined) return near(end.head, start.head);
+  return near(end.base, start.base);
 }
 
 /**

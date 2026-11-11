@@ -145,6 +145,12 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
     return `<div class="atom-head"><span class="path">${esc(atom.file)}</span>${sym ? `<span class="sym">${esc(sym)}</span>` : ""}<span class="counts"><span class="plus">+${add}</span> <span class="minus">−${del}</span></span>${gh}${extra}</div>`;
   };
 
+  /** Straight on from the code above, in the same file: name the new symbol, nothing more. */
+  const joinedHead = (atom: ChangeAtom) => {
+    const sym = atomLabel(atom).slice(atom.file.length).replace(/^ › /, "");
+    return sym ? `<div class="atom-head joined-head"><span class="sym">${esc(sym)}</span></div>` : "";
+  };
+
   const emptyNote = (atom: ChangeAtom) => `<p class="empty">${atom.kind === "renamed" ? "File renamed without content changes." : "Binary file changed."}</p>`;
 
   /** A whole atom with its own raw-diff toggle (mechanical list and raw view). */
@@ -160,7 +166,8 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
   const chunkBlock = (c: WalkChunk) => {
     const atom = byId.get(c.atomId);
     if (!atom) return "";
-    return `<div class="atom chunk"${c.first ? ` id="atom-${atom.id}"` : ""}>${atomHead(atom, !c.first)}${diffTable(atom.id, c.rows, "story")}</div>`;
+    const head = c.joined ? joinedHead(atom) : atomHead(atom, !c.first);
+    return `<div class="atom chunk${c.joined ? " joined" : ""}"${c.first ? ` id="atom-${atom.id}"` : ""}>${head}${diffTable(atom.id, c.rows, "story")}</div>`;
   };
 
   const citeLinks = (cites: Citation[]) =>
@@ -195,7 +202,7 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
   const steps = story.steps
     .map((s, i) => {
       const stepAtoms = s.atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
-      const { beats } = walkthrough(s, snippets);
+      const { beats } = walkthrough(s, snippets, (id) => byId.get(id)?.file);
       const walk = beats
         .map((b) => {
           const cites = citeLinks(b.cites);

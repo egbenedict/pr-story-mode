@@ -69,6 +69,18 @@ describe("TypeScript atoms", () => {
     expectFullCoverage(pr, atoms);
   });
 
+  it("joins small declarations that sit next to each other, but not across a function or a long one", async () => {
+    const base = "export const a = 1;\nexport const b = {\n  x: 1,\n};\nexport const c = 3;\n\nexport function f() {\n  return a;\n}\nexport const d = 4;\nexport const big = [\n" + Array.from({ length: 10 }, (_, i) => `  ${i},`).join("\n") + "\n];\n";
+    const head = base.replace("= 1;", "= 2;").replace("x: 1", "x: 2").replace("= 3;", "= 30;").replace("return a;", "return a + 1;").replace("= 4;", "= 40;").replace("  0,", "  100,");
+    const pr = makePR({ "src/k.ts": base }, { "src/k.ts": head });
+    const atoms = await atomsOf(pr);
+    // a, b and c are one piece; f breaks the run; big is too long to join d.
+    expect(paths(atoms)).toEqual(["src/k.ts:a, b, c", "src/k.ts:f", "src/k.ts:d", "src/k.ts:big"]);
+    expect(atoms[0].defines).toEqual(expect.arrayContaining(["a", "b", "c"]));
+    expect(atoms[0].headRange).toEqual({ start: 1, end: 5 });
+    expectFullCoverage(pr, atoms);
+  });
+
   it("links a definition to its use in another file", async () => {
     const pr = makePR(
       { "src/util.ts": "export const x = 1;\n", "src/main.ts": "export function run() {\n  return 1;\n}\n" },

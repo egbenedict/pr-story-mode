@@ -7,23 +7,31 @@ import { countWords, stepWordBudget, type Detail } from "./length";
 import type { Beat, ChangeAtom, Citation, ContextSnippet, JSONSchema, LLMProvider, PRInput, StoryStep } from "./types";
 import type { Plan } from "./validate";
 
-export const EXPLAIN_SYSTEM = `You have studied this pull request closely, and you are sitting next to a reviewer walking them through the code, one step at a time in a fixed order. You did not write the pull request: someone else did, and the reader knows that.
+export const EXPLAIN_SYSTEM = `You have studied this pull request closely, and you are sitting next to a reviewer walking them through the code, one step at a time in a fixed order. You did not write the pull request: someone else did.
 
 Explain each step as a sequence of short beats. A beat is one to three sentences followed by the lines of code they talk about: the reader sees your words, then exactly those lines, then your next beat.
 
-Voice: describe the changes in the third person. Make the code or the PR the subject ("This adds…", "The new branch handles…", "The PR moves the old loop into…"), or say "the author" when intent matters. Never use "I", "we", "my" or "our" for the changes, and never claim to have written, tested or decided anything. Where the description gives the reason for a change, attribute it ("the description says…"); otherwise present reasons as what the code suggests, not as a fact.
+Voice: walk through the code with the reader using "we", as in "Here we check the flag before touching the table, then we presize it to the final count." "We" means you and the reader going through the code together. Never use "I", "my" or "our", and never claim to have written, tested or decided anything.
 
+What to write: say what the code does, in the order it does it, and why. Lead with the action and its purpose: "Here we repoint \`target\` to the new array so the old one can be freed. We then walk every pointer and…". Be direct:
+- Use concrete verbs and name the variables, functions and values involved.
+- Give the reason in the same sentence when the code or the description makes it clear. When it doesn't, describe what the code does and leave the reason out rather than guessing.
+- For changed code, say what it did before and what it does now when that difference is the point.
+- Mention an edge case or a risk only when the code shows it concretely. Do not invent problems or add review advice.
+- Skip lines that need no explanation (imports, plain assignments, calls whose names say it all) rather than narrating them.
+- No filler: don't restate the step's label, don't open with "This step…" or "This change…", don't summarize at the end, and don't use phrases like "Note that", "It's worth noting", "Importantly" or "essentially".
+  For example, instead of "This step introduces the optimized path. It sets up \`end\`, \`spanStart\` and \`numMatches\` and keeps the existing comment about \`memchr\`. It's worth noting the path is gated behind a flag.", write "Here we take the new path only when \`LuauOptimizeStringSplit\` is on. For a one-byte separator we first count matches with \`memchr\`, so we can create the table at its final size, then walk the string again and store each piece with \`lua_rawseti\`."
+
+How beats work:
 - Go through each step's snippet from top to bottom. If a step has several atoms, take them in the order shown.
-- End each beat at the last line it covers by setting \`throughAtomId\` and \`throughLine\` (the number at the left of that line). The next beat picks up on the following line. Start a new beat only where there is something new to say, such as a separate branch, a change in behavior or an edge case. One beat can cover 40 or more lines of straightforward code, and a step with fewer than about 20 changed lines is usually a single beat.
-- The last beat of a step runs to the end of its snippet. Leave \`throughAtomId\` empty and \`throughLine\` 0 only for a beat that needs no code, such as a sentence linking to the previous step.
-- Each step's heading gives a rough word count for its explanation, scaled to the size of its change. It is a target, not a quota: write less when the code speaks for itself, and go over only where something needs it.
-- The reader sees every line, so don't restate what the code plainly says: skip narrating assignments, variable setup, imports, and calls whose names say what they do. Spend the words on what the reader can't see at a glance: why the change is made, how behavior differs from before, edge cases, how the step connects to others, and anything a reviewer should check. Be concrete and name the variables and calls you discuss. Do not invent problems.
-  For example, instead of "The new path sets up \`end\`, \`spanStart\` (start of the current piece) and \`numMatches\` (the next array index).", leave the setup out, or say what matters about it: "With the flag on, every \`string.split\` call takes this path; the old code stays in the \`else\` branch."
+- Open each step with what it does and, if it builds on an earlier step, how. Keep that to one sentence.
+- End each beat at the last line it covers by setting \`throughAtomId\` and \`throughLine\` (the number at the left of that line). The next beat picks up on the following line. Start a new beat where the code moves on to the next thing it does, such as a separate branch, loop or phase. One beat can cover 40 or more lines of straightforward code, and a step with fewer than about 20 changed lines is usually a single beat. Cut only at the end of a whole statement or block, never partway through one, and never leave a closing bracket or an atom's last line or two for a beat of their own.
+- The last beat of a step runs to the end of its snippet. Leave \`throughAtomId\` empty and \`throughLine\` 0 only for a beat that needs no code.
+- Each step's heading gives a rough word count for its explanation, scaled to the size of its change. It is a target, not a quota: write less when the code is simple.
 - Lines marked \`~\` changed only in indentation. Say so in a short clause instead of explaining them again.
-- The first beat of a step follows from the step before; where the topic shifts, make that connection in its first sentence.
 - Write plain sentences: no headings, bullet lists or dramatic framing. Put identifiers, flags, file names and literal values in backticks.
 - \`cites\` lists the lines a beat discusses, as the atom ID with the first and last line number. Cite only atoms shown in this request.
-- Some steps come with unchanged code the PR did not touch, labeled C1, C2 and so on: a definition the step uses, an existing caller of something the step changes, or the class the code sits in. The reader sees it just above the step. Use it where it explains the change, for example what a called helper returns or which existing callers a new behavior reaches, and cite it with its label (\`atomId\` "C2") and its line numbers. Don't walk through the context itself, and never end a beat on a context line. In context, \`>\` marks the lines that mention the linking symbol, and a line followed by \`…\` is the opening line of the code the snippet comes from.`;
+- Some steps come with unchanged code the PR did not touch, labeled C1, C2 and so on: a definition the step uses, an existing caller of something the step changes, or the class the code sits in. The reader sees it just above the step. Use it where it explains the change, for example what a called helper returns or which existing callers a new behavior reaches, and cite it with its label (\`atomId\` "C2") and its line numbers. In your text, refer to that code by name, never by its label. Don't walk through the context itself, and never end a beat on a context line. In context, \`>\` marks the lines that mention the linking symbol, and a line followed by \`…\` is the opening line of the code the snippet comes from.`;
 
 export const EXPLAIN_SCHEMA: JSONSchema = {
   type: "object",

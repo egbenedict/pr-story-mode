@@ -61,6 +61,11 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .atom { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin: 10px 0 0; overflow: hidden; }
 .atom-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; padding: 7px 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
 .atom-head.cont { padding: 3px 12px; font-size: 11.5px; color: var(--muted); }
+/* Code that carries straight on from the chunk above (next lines of the same file) reads as one block. */
+.atom.chunk.joined { margin-top: 0; border-top: 1px dashed var(--line); border-top-left-radius: 0; border-top-right-radius: 0; }
+.atom.chunk:has(+ .atom.chunk.joined) { border-bottom: 0; border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.atom-head.joined-head { border-bottom: 0; padding: 2px 12px 0; font-size: 11.5px; color: var(--muted); }
+.atom-head.joined-head .sym { font-weight: 400; }
 .atom-head.cont .sym { font-weight: 400; }
 .atom-head .path { font-family: var(--mono); }
 .atom-head .sym { font-family: var(--mono); font-weight: 600; }
