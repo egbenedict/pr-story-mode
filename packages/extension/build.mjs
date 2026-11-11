@@ -9,6 +9,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, "dist");
 const require = createRequire(import.meta.url);
 const watch = process.argv.includes("--watch");
+// --release: the build that goes in the store zip (no source maps).
+const release = process.argv.includes("--release");
 
 // Grammar wasm files and the query folders their tags come from (see src/grammars.ts).
 const GRAMMARS = {
@@ -28,6 +30,8 @@ const QUERY_PACKAGES = ["javascript", "typescript", "python", "c", "cpp", "go", 
 function copyStatic() {
   mkdirSync(join(out, "grammars"), { recursive: true });
   cpSync(join(here, "manifest.json"), join(out, "manifest.json"));
+  mkdirSync(join(out, "icons"), { recursive: true });
+  for (const size of [16, 32, 48, 128]) cpSync(join(here, "icons", `icon-${size}.png`), join(out, "icons", `icon-${size}.png`));
   cpSync(join(here, "src/reader/reader.html"), join(out, "reader.html"));
   cpSync(join(here, "src/options/options.html"), join(out, "options.html"));
   cpSync(require.resolve("web-tree-sitter/tree-sitter.wasm"), join(out, "tree-sitter.wasm"));
@@ -45,7 +49,7 @@ const common = {
   platform: "browser",
   target: "chrome120",
   jsx: "automatic",
-  sourcemap: "linked",
+  sourcemap: release ? false : "linked",
   minify: !watch,
   logLevel: "info",
   define: { "process.env.NODE_ENV": watch ? '"development"' : '"production"' },

@@ -1,11 +1,12 @@
 {
   "name": "@prstory/extension",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
-    "watch": "node build.mjs --watch"
+    "watch": "node build.mjs --watch",
+    "package": "node package.mjs"
   },
   "dependencies": {
     "@prstory/core": "0.1.0",

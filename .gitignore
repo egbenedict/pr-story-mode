@@ -7,3 +7,4 @@ bench/*
 *.log
 packages/extension/dist/
 packages/cli/dist/
+packages/extension/release/

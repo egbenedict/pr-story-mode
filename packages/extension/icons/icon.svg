@@ -1,0 +1,11 @@
+<!-- Store and toolbar icon: a step-by-step story (three ordered steps). 128px with the store's 16px margin. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect x="16" y="16" width="96" height="96" rx="22" fill="#c2410c"/>
+  <path d="M46 44v40" stroke="#fff" stroke-opacity=".55" stroke-width="4"/>
+  <g fill="#fff">
+    <circle cx="46" cy="44" r="7"/><circle cx="46" cy="64" r="7"/><circle cx="46" cy="84" r="7"/>
+    <rect x="60" y="39" width="34" height="10" rx="5"/>
+    <rect x="60" y="59" width="24" height="10" rx="5"/>
+    <rect x="60" y="79" width="30" height="10" rx="5"/>
+  </g>
+</svg>

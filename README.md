@@ -291,11 +291,12 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ### Commands
 
 ```bash
-npm test                  # 141 tests
+npm test                  # 153 tests
 npm run typecheck
 npm run build             # extension and CLI
 npm run build:extension   # packages/extension/dist
 npm run build:cli         # packages/cli/dist
+npm run package:extension # store zip in packages/extension/release (no source maps)
 ```
 
 <details>
@@ -314,6 +315,17 @@ Add `&demo` for a scripted model (`src/reader/demo.ts`) that streams a plausible
 
 - **Content script** (`src/content.ts`): detects PR pages, including GitHub's in-page navigation, and adds one button: in the PR header when it's on screen, otherwise floating at the bottom right. Nothing else on the page changes.
 - **Why an extension page, not the service worker:** Chrome stops idle service workers after about 30 seconds, and one model call can take longer. An extension page in an iframe also keeps GitHub's styles and content security policy out of the reader. The service worker only opens settings and registers buttons on enterprise hosts.
+
+### Publishing the extension
+
+`npm run package:extension` builds a release and zips it for the Chrome Web Store. [`packages/extension/store/STORE.md`](packages/extension/store/STORE.md) has everything the store's dashboard asks for, ready to paste:
+
+- the listing text;
+- a justification for each permission;
+- the privacy answers;
+- screenshots and a promo tile.
+
+The privacy policy is [`PRIVACY.md`](PRIVACY.md), published at [this gist](https://gist.github.com/egbenedict/3c19667ca8fc936adfc44e807461c373).
 
 ## Benchmarks
 

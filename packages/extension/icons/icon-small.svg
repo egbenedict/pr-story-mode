@@ -1,0 +1,10 @@
+<!-- Small sizes (16–48px): full bleed, heavier shapes so they stay readable. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+  <rect width="96" height="96" rx="20" fill="#c2410c"/>
+  <g fill="#fff">
+    <circle cx="27" cy="26" r="9"/><circle cx="27" cy="48" r="9"/><circle cx="27" cy="70" r="9"/>
+    <rect x="44" y="19" width="38" height="14" rx="7"/>
+    <rect x="44" y="41" width="26" height="14" rx="7"/>
+    <rect x="44" y="63" width="33" height="14" rx="7"/>
+  </g>
+</svg>
