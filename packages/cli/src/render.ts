@@ -247,6 +247,7 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
     ${context}
     <div class="walk">${walk}${empties}</div>
     <div class="rawview"><p class="raw-label">${inline(s.label)}</p>${stepAtoms.filter((a) => (snippets.get(a.id) ?? []).length).map((a) => `<div class="atom">${atomHead(a, false)}${rawHunks(a)}</div>`).join("")}</div>
+    <div class="step-foot"><button class="step-done" type="button" aria-pressed="false" data-step="${i + 1}"><span class="tick" aria-hidden="true"></span><span class="label">Mark step ${i + 1} reviewed</span></button></div>
   </div>
 </section>`;
     })
@@ -318,15 +319,24 @@ ${mechanical}
       b.checked = on; if (on) n++;
       b.closest('li').classList.toggle('done', on);
       document.getElementById('step-' + s)?.classList.toggle('done', on);
+      const btn = document.querySelector('.step-done[data-step="' + s + '"]');
+      if (btn) {
+        btn.setAttribute('aria-pressed', on);
+        btn.querySelector('.tick').textContent = on ? '✓' : '';
+        btn.querySelector('.label').textContent = (on ? 'Step ' : 'Mark step ') + s + ' reviewed';
+        btn.title = on ? 'Click to mark it not reviewed' : '';
+      }
     }
     document.querySelector('.progress > div').style.width = total ? (100 * n / total) + '%' : '0';
     document.querySelector('.progress-text').textContent = n + ' of ' + total + ' steps reviewed';
   };
-  for (const b of boxes) b.addEventListener('change', () => {
-    done[b.dataset.step] = b.checked;
+  const setDone = (s, on) => {
+    done[s] = on;
     try { localStorage.setItem(KEY, JSON.stringify(done)); } catch {}
     paint();
-  });
+  };
+  for (const b of boxes) b.addEventListener('change', () => setDone(b.dataset.step, b.checked));
+  for (const btn of document.querySelectorAll('.step-done')) btn.addEventListener('click', () => setDone(btn.dataset.step, !done[btn.dataset.step]));
   paint();
 
   for (const btn of document.querySelectorAll('.step-raw')) btn.addEventListener('click', () => {

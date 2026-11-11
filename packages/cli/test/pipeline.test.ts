@@ -157,6 +157,9 @@ describe("runPipeline", () => {
     expect(html).toContain("Clamp run() output");
     expect(html).toContain("Mechanical changes");
     expect(html).toContain(`All ${r.coverage.totalLines} changed lines are shown exactly once.`);
+    // Each step ends with a button that marks it reviewed, like its outline checkbox.
+    const buttons = [...html.matchAll(/<button class="step-done" type="button" aria-pressed="false" data-step="(\d+)">/g)].map((m) => +m[1]);
+    expect(buttons).toEqual(r.story.steps.map((_, i) => i + 1));
   });
 
   it("renders beats with their code, lists and code spans", async () => {

@@ -576,7 +576,21 @@ function ContextBlock({ c, step, index }: { c: ContextSnippet; step: number; ind
   );
 }
 
-function Step({ i, step, done }: { i: number; step: StoryStep; done: boolean }) {
+/** The button at the end of a step: the same as ticking the step in the outline. */
+function DoneButton({ n, done, onDone }: { n: number; done: boolean; onDone: (on: boolean) => void }) {
+  return (
+    <div className="step-foot">
+      <button className="step-done" type="button" aria-pressed={done} onClick={() => onDone(!done)} title={done ? "Click to mark it not reviewed" : undefined}>
+        <span className="tick" aria-hidden="true">
+          {done ? "✓" : ""}
+        </span>
+        {done ? `Step ${n} reviewed` : `Mark step ${n} reviewed`}
+      </button>
+    </div>
+  );
+}
+
+function Step({ i, step, done, onDone }: { i: number; step: StoryStep; done: boolean; onDone: (on: boolean) => void }) {
   const { byId, snippets, files, fileView } = useContext(StoryCtx);
   const [raw, setRaw] = useState(false);
   const stepAtoms = step.atomIds.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
@@ -665,6 +679,7 @@ function Step({ i, step, done }: { i: number; step: StoryStep; done: boolean }) 
             ))}
           </div>
         ) : null}
+        <DoneButton n={i + 1} done={done} onDone={onDone} />
       </div>
     </section>
   );
@@ -897,7 +912,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra, ask }:
           </header>
           {view.plan.map((p, i) => {
             const s = view.steps[i];
-            return s ? <Step key={i} i={i} step={s} done={!!done[i + 1]} /> : <PendingStep key={i} i={i} label={p.label} atomIds={p.atomIds} active={i === active} draft={writing?.drafts[i]} />;
+            return s ? <Step key={i} i={i} step={s} done={!!done[i + 1]} onDone={(on) => setDone(i + 1, on)} /> : <PendingStep key={i} i={i} label={p.label} atomIds={p.atomIds} active={i === active} draft={writing?.drafts[i]} />;
           })}
           {!writing && mechAtoms.length ? (
             <details className="mechanical" id="mechanical">

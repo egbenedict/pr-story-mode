@@ -80,6 +80,14 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .raw-toggle, .step-raw { font: 12px var(--sans); background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 4px; padding: 1px 8px; cursor: pointer; }
 .atom-head .counts + .raw-toggle { margin-left: auto; }
 .raw-toggle[aria-pressed="true"], .step-raw[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+/* "Mark reviewed" at the end of each step, the same as ticking the step in the outline. */
+.step-foot { clear: both; display: flex; margin-top: 16px; }
+.step-done { font: 13px var(--sans); display: inline-flex; align-items: center; gap: 6px; background: var(--panel); border: 1px solid var(--line); color: var(--ink); border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+.step-done:hover { border-color: var(--accent); color: var(--accent); }
+.step-done:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.step-done .tick { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid currentColor; display: inline-grid; place-items: center; font-size: 9px; line-height: 1; }
+.step-done[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.step-done[aria-pressed="true"]:hover { color: var(--on-accent); opacity: 0.9; }
 .rawview { display: none; }
 .step.show-raw .rawview { display: block; }
 /* Raw diff shows only the code, as GitHub's Files view does: no explanations or unchanged context. */
