@@ -209,6 +209,9 @@ export type WalkBeat = { text: string; cites: Citation[]; code: WalkChunk[] };
  * A cut point that does not match a shown line snaps to the nearest one after the previous cut, and
  * a cut moves past closing brackets right after it, so a lone \`}\` never starts the next chunk.
  * Rows left over at the end join the atom's last chunk instead of trailing in a box of their own.
+ * An atom no beat cut into goes with the first beat that cites it, so the code follows the text
+ * even when the text takes the atoms in another order; one that is never cited goes next to its
+ * neighbour in the step's order.
  * With \`fileOf\`, chunks that continue straight on in the same file are marked \`joined\`.
  */
 export function walkthrough(
@@ -272,14 +275,17 @@ export function walkthrough(
     if (chunk) beats[i].code.push(chunk);
   });
 
-  // Whatever no beat reached goes after the last beat, atom by atom.
+  // Whatever no beat reached: the rest of an atom a beat already showed carries on in that block;
+  // a whole atom goes with the first beat that cites it, else beside its neighbour in the step.
   if (!beats.length) beats.push({ text: "", cites: [], code: [] });
   const last = beats[beats.length - 1];
+  const citedIn = new Map<string, number>();
+  step.explanation.forEach((e, i) => e.cites.forEach((c) => c.atomId && !citedIn.has(c.atomId) && citedIn.set(c.atomId, i)));
+  const uncited: WalkChunk[] = [];
   for (const id of step.atomIds) {
     const rows = snippets.get(id) ?? [];
     const from = cursor.get(id)!;
     if (from >= rows.length) continue;
-    // The rest of an atom a beat already showed carries on in that beat's block.
     const prev = latest.get(id);
     if (prev) {
       let rest = rows.slice(from);
@@ -289,7 +295,42 @@ export function walkthrough(
       continue;
     }
     const chunk = take(id, rows.length - 1);
-    if (chunk) last.code.push(chunk);
+    if (!chunk) continue;
+    const b = citedIn.get(id);
+    if (b === undefined) {
+      uncited.push(chunk);
+      continue;
+    }
+    // Within the beat, in the order its citations name the atoms.
+    const cites = step.explanation[b].cites;
+    const rank = (atomId: string) => {
+      const k = cites.findIndex((c) => c.atomId === atomId);
+      return k < 0 ? Infinity : k;
+    };
+    const code = beats[b].code;
+    const at = code.findIndex((c) => rank(c.atomId) > rank(id));
+    code.splice(at < 0 ? code.length : at, 0, chunk);
+  }
+  const where = (atomId: string, fromEnd: boolean): [WalkBeat, number] | null => {
+    const order = fromEnd ? [...beats].reverse() : beats;
+    for (const b of order) {
+      const ids = b.code.map((c) => c.atomId);
+      const k = fromEnd ? ids.lastIndexOf(atomId) : ids.indexOf(atomId);
+      if (k >= 0) return [b, k];
+    }
+    return null;
+  };
+  for (const chunk of uncited) {
+    const k = step.atomIds.indexOf(chunk.atomId);
+    let spot: [WalkBeat, number] | null = null;
+    for (let j = k + 1; j < step.atomIds.length && !spot; j++) spot = where(step.atomIds[j], false);
+    if (spot) {
+      spot[0].code.splice(spot[1], 0, chunk);
+      continue;
+    }
+    for (let j = k - 1; j >= 0 && !spot; j--) spot = where(step.atomIds[j], true);
+    if (spot) spot[0].code.splice(spot[1] + 1, 0, chunk);
+    else last.code.push(chunk);
   }
   if (fileOf)
     for (const b of beats)

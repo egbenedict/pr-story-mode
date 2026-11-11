@@ -151,6 +151,53 @@ describe("walkthrough chunking", () => {
   });
 });
 
+describe("code follows the text", () => {
+  // Like sherlock#3211's step 3: the plan lists 32-49, 1-6, 16-31, the text explains 16-31 then 32-49,
+  // and nothing mentions the docstring at 1-6.
+  const add = (n: number): SnippetRow => ({ type: "add", text: `l${n}`, newLine: n });
+  const span = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, k) => add(a + k));
+  const snippets = new Map([
+    ["rejects", span(32, 49)],
+    ["doc", span(1, 6)],
+    ["reduces", span(16, 31)],
+  ]);
+  const cite = (atomId: string, a: number, b: number) => ({ atomId, lines: [a, b] as [number, number] });
+  const order = (w: ReturnType<typeof walkthrough>) => w.beats.map((b) => b.code.map((c) => c.atomId));
+
+  it("puts an atom no beat cut into under the first beat that cites it, and an uncited one beside its neighbour", () => {
+    const step: StoryStep = {
+      atomIds: ["rejects", "doc", "reduces"],
+      label: "x",
+      explanation: [
+        { text: "First we reduce names.", cites: [cite("reduces", 16, 20)] },
+        { text: "Then we reject bad ones.", cites: [cite("rejects", 32, 40)] },
+      ],
+    };
+    expect(order(walkthrough(step, snippets))).toEqual([["doc", "reduces"], ["rejects"]]);
+  });
+
+  it("does the same when the beats cut into the atoms in their own order", () => {
+    const step: StoryStep = {
+      atomIds: ["rejects", "doc", "reduces"],
+      label: "x",
+      explanation: [
+        { text: "First we reduce names.", cites: [], through: { atomId: "reduces", line: 31 } },
+        { text: "Then we reject bad ones.", cites: [], through: { atomId: "rejects", line: 49 } },
+      ],
+    };
+    expect(order(walkthrough(step, snippets))).toEqual([["doc", "reduces"], ["rejects"]]);
+  });
+
+  it("orders atoms within a beat by the order its citations name them", () => {
+    const step: StoryStep = {
+      atomIds: ["rejects", "reduces"],
+      label: "x",
+      explanation: [{ text: "We reduce, then reject.", cites: [cite("reduces", 16, 20), cite("rejects", 32, 40)] }],
+    };
+    expect(order(walkthrough(step, snippets))).toEqual([["reduces", "rejects"]]);
+  });
+});
+
 describe("expanding a chunk", () => {
   // 30 lines; lines 15 and 25 change.
   const head = Array.from({ length: 30 }, (_, i) => (i + 1 === 15 || i + 1 === 25 ? `X${i + 1}` : `l${i + 1}`)).join("\n") + "\n";
