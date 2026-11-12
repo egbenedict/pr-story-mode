@@ -162,10 +162,35 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
     return null;
   });
 
+  // Doc comments join the declaration right below them, where the pack asks for it.
+  const fileLines: Partial<Record<"LEFT" | "RIGHT", string[]>> = {};
+  const documented = (ref: DiffLineRef): Location | null => {
+    const tree = ref.side === "LEFT" ? baseTree : headTree;
+    if (!tree || !pack) return null;
+    const lines = (fileLines[ref.side] ??= ((ref.side === "LEFT" ? file.baseText : file.headText) ?? "").split("\n"));
+    for (let r = ref.line; r < lines.length; r++) {
+      const loc = locate(tree.rootNode, r, pack);
+      if (loc.kind === "leading") continue; // more of the comment, or another one
+      if (lines[r].trim() === "") return null; // a blank line: the comment isn't attached
+      return loc.kind === "unit" && loc.named && loc.start === r + 1 ? loc : null;
+    }
+    return null;
+  };
+
   for (let i = 0; i < located.length; i++) {
     if (keyOf[i] !== null) continue;
     const { line, loc } = located[i];
     const hunk = line.hunk;
+    if (loc.kind === "leading" && parsed && pack!.docJoins?.(line.text)) {
+      const doc = documented(line.ref);
+      if (doc && doc.kind === "unit") {
+        const key = doc.path.join(".");
+        addToGroup(groups, key, doc.path, true, false, line, doc.node, doc.start, doc.end);
+        if (doc.block) groups.get(key)!.block = true;
+        keyOf[i] = key;
+        continue;
+      }
+    }
     // Comments and decorators prefer the next unit; blank lines prefer the previous one.
     const order = loc.kind === "leading" ? [1, -1] : [-1, 1];
     let target: string | null = null;
@@ -205,11 +230,13 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
       if (!g.isImport) for (const d of sym.defs) if (!defines.includes(d) && /^[\w$#~]+$/.test(d)) defines.push(d);
     }
     // A member is also known by its class, so `this.m()` / `self.m()` links only to the class's own `m`.
-    const owner = g.path.length >= 2 ? g.path[g.path.length - 2] : null;
+    const pathOwner = g.path.length >= 2 ? g.path[g.path.length - 2] : null;
+    const owner = pathOwner && pack?.ownerType ? pack.ownerType(pathOwner) : pathOwner;
     if (g.named && !g.isImport && defines.length && owner && /^[\w$]+$/.test(owner)) {
       // A joined run of fields defines each of them on the class.
       const own = g.joinedNames ? [...defines] : [defines[0]];
       for (const d of own) defines.push(`${owner}.${d}`);
+      if (pack?.scopedMembers) for (const d of own) defines.push(`${owner}::${d}`);
     }
     for (const d of defines) refs.delete(d);
 
@@ -241,12 +268,21 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
   let wrapperStart: number | null = null;
 
   for (;;) {
-    const child = childAt(node, row);
+    const child = childAt(node, row, pack);
     if (!child) break;
     const t = child.type;
 
     if (pack.isLeading(t)) return { kind: "leading" };
     if (pack.isImport(t)) return { kind: "import", path: [...path, "<imports>"], node: child };
+
+    // A group of declarations: each entry is its own unit. The group's opening line joins the entry
+    // below it, and its closing line the one above.
+    const list = pack.declList?.(child);
+    if (list) {
+      if (!childAt(list, row, pack)) return row === child.startPosition.row ? { kind: "leading" } : { kind: "none" };
+      node = list;
+      continue;
+    }
 
     if (pack.isWrapper(t)) {
       wrapperStart ??= child.startPosition.row;
@@ -267,7 +303,7 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
     wrapperStart = null;
 
     if (pack.isClassLike(t)) {
-      const name = nameOf(child) ?? `<${t}>`;
+      const name = pack.classNameOf?.(child) ?? nameOf(child) ?? `<${t}>`;
       path.push(name);
       unit = { node: child, start, end: child.endPosition.row + 1, named: true, path: [...path], block: true };
       const body = child.childForFieldName("body") ?? child.namedChildren.find((c) => c && pack.isBody(c.type)) ?? null;
@@ -280,12 +316,18 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
 
     if (pack.isFunctionLike(t)) {
       const name = nameOf(child) ?? "<anonymous>";
-      unit = { node: child, start, end: child.endPosition.row + 1, named: true, path: [...path, name], block: true };
+      const owner = pack.ownerOf?.(child) ?? null;
+      unit = { node: child, start, end: child.endPosition.row + 1, named: true, path: owner ? [...path, owner, name] : [...path, name], block: true };
       break;
     }
 
     // Any other statement directly inside a container (module, class body) is its own unit.
     const name = nameOf(child);
+    const packName = name === null ? (pack.unitName?.(child) ?? null) : null;
+    if (packName) {
+      unit = { node: child, start, end: child.endPosition.row + 1, named: true, path: [...path, packName], block: true };
+      break;
+    }
     unit = { node: child, start, end: child.endPosition.row + 1, named: name !== null, path: name ? [...path, name] : [...path] };
     break;
   }
@@ -361,9 +403,10 @@ function joinGroups(run: Group[]): Group {
   };
 }
 
-function childAt(node: Node, row: number): Node | null {
+function childAt(node: Node, row: number, pack?: LanguagePack): Node | null {
   for (const c of node.namedChildren) {
     if (!c) continue;
+    if (pack?.endsAtLineStart && c.endPosition.row === row && c.endPosition.column === 0 && c.startPosition.row < row) continue;
     if (c.startPosition.row <= row && row <= c.endPosition.row) return c;
     if (c.startPosition.row > row) break;
   }

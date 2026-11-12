@@ -189,7 +189,7 @@ describe("mechanical changes", () => {
 });
 
 describe("other tiers", () => {
-  it("uses generic Tier 1 atoms for Go and JSON, and hunk atoms for unknown files", async () => {
+  it("uses Tier 2 atoms for Go, Tier 1 for JSON, and hunk atoms for unknown files", async () => {
     const goBase = "package m\n\nfunc Alpha() int {\n\treturn 1\n}\n\nfunc Beta() int {\n\treturn 2\n}\n";
     const pr = makePR(
       { "m.go": goBase, "conf.json": '{\n  "name": "x",\n  "port": 80\n}\n', "notes.md": "# Notes\n\nhello\n" },
@@ -201,7 +201,7 @@ describe("other tiers", () => {
     );
     const atoms = await atomsOf(pr);
     expect(paths(atoms)).toEqual(["conf.json:name", "conf.json:port", "m.go:Alpha", "m.go:Beta", "notes.md:"]);
-    expect(atoms.map((a) => a.supportTier)).toEqual([1, 1, 1, 1, 0]);
+    expect(atoms.map((a) => a.supportTier)).toEqual([1, 1, 2, 2, 0]);
     expect(buildGraph(atoms).some((e) => e.symbol === "Alpha")).toBe(true);
     expectFullCoverage(pr, atoms);
   });
@@ -251,6 +251,248 @@ static int str_split(lua_State* L) {
     expect(atoms.every((a) => a.supportTier === 1)).toBe(true);
     const edges = buildGraph(atoms);
     expect(edges.map((e) => e.symbol)).toContain("LuauFasterSplit");
+    expectFullCoverage(pr, atoms);
+  });
+});
+
+/** `from → to` edges by atom name. */
+const edgeNames = (atoms: ChangeAtom[]) => {
+  const name = (id: string) => atoms.find((a) => a.id === id)!.symbolPath.join(".");
+  return buildGraph(atoms).map((e) => `${name(e.from)} → ${name(e.to)}`);
+};
+
+describe("Go atoms", () => {
+  const base = `package m
+
+import "example.com/app/api"
+
+// Client sends things.
+type Client struct {
+	n int
+}
+
+type Other struct{}
+
+const (
+	Low  = 1
+	High = 2
+)
+
+// Send sends.
+func (c *Client) Send() error {
+	return c.flush()
+}
+
+func (c *Client) flush() error { return nil }
+
+func (c *Client) String() string { return "client" }
+
+func (o Other) String() string { return "other" }
+
+func (o Other) flush() error { return nil }
+
+func Use() int { return api.Limit }
+`;
+  const apiBase = "package api\n\nvar Limit = 1\n\nfunc Limit2() int { return 2 }\n";
+
+  it("names methods by their receiver and keeps same-named methods apart", async () => {
+    const head = base.replace('return "client"', 'return "Client"').replace('return "other"', 'return "Other"');
+    const pr = makePR({ "m.go": base }, { "m.go": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["m.go:Client.String", "m.go:Other.String"]);
+    expect(atoms[0].defines).toEqual(["String", "Client.String"]);
+    expect(atoms.every((a) => a.supportTier === 2)).toBe(true);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("links a receiver's calls to its own type's methods and package references across files", async () => {
+    const head = base
+      .replace("return c.flush()", "return c.flush() // now checked")
+      .replace("{ return nil }\n\nfunc (c *Client) String", "{ return c.check() }\n\nfunc (c *Client) String")
+      .replace("func (o Other) flush() error { return nil }", "func (o Other) flush() error { return o.check() }")
+      .replace("return api.Limit }", "return api.Limit + 1 }");
+    const pr = makePR({ "m.go": base, "api/api.go": apiBase }, { "m.go": head, "api/api.go": apiBase.replace("Limit = 1", "Limit = 10") });
+    const atoms = await atomsOf(pr);
+    const edges = edgeNames(atoms);
+    expect(edges).toContain("Client.flush → Client.Send");
+    expect(edges).not.toContain("Other.flush → Client.Send");
+    expect(edges).toContain("Limit → Use");
+    expect(atoms.find((a) => a.symbolPath.join(".") === "Use")!.references).not.toContain("api");
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("gives each entry of a grouped declaration its own name", async () => {
+    const head = base.replace("High = 2", "High = 3").replace("\tLow  = 1\n", "\tLow  = 1\n\tMid  = 2\n");
+    const pr = makePR({ "m.go": base }, { "m.go": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["m.go:Mid, High"]);
+    expect(atoms[0].defines).toEqual(expect.arrayContaining(["Mid", "High"]));
+    expect(atoms[0].defines).not.toContain("Low");
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("joins a doc comment change to the declaration it documents, and names package lines", async () => {
+    const head = base.replace("// Send sends.", "// Send sends the queued items.").replace("// Client sends things.", "// Client sends queued things.");
+    const pr = makePR({ "m.go": base }, { "m.go": head, "n.go": "package m\n\nfunc New() *Client { return &Client{} }\n" });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["m.go:Client", "m.go:Client.Send", "n.go:package m", "n.go:New"]);
+    expectFullCoverage(pr, atoms);
+  });
+});
+
+describe("Rust atoms", () => {
+  const base = `use std::io;
+
+/// A thing.
+#[derive(Debug)]
+pub struct Thing {
+    pub n: u32,
+}
+
+impl<T: Clone> Sp<T> {
+    fn new() -> Self { todo!() }
+}
+
+impl Thing {
+    /// Makes a thing.
+    pub fn new() -> Self { Thing { n: 0 } }
+
+    /// Bumps it.
+    pub fn bump(&mut self) {
+        self.n += 1;
+    }
+
+    fn helper(&self) {}
+}
+
+impl Other {
+    pub fn new() -> Self { Other }
+}
+
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self { Error::Io }
+}
+
+impl From<fmt::Error> for Error {
+    fn from(e: fmt::Error) -> Self { Error::Fmt }
+}
+
+impl IntoThing<Thing> for Thing {
+    fn into_thing(self) -> Thing { self }
+}
+
+fn make() -> Thing {
+    Thing::new()
+}
+`;
+
+  it("names the signature line of a documented function by its function", async () => {
+    const head = base.replace("pub fn bump(&mut self) {", "pub fn bump(&mut self, by: u32) {").replace("self.n += 1;", "self.n += by;");
+    const pr = makePR({ "t.rs": base }, { "t.rs": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["t.rs:Thing.bump"]);
+    expect(atoms[0].supportTier).toBe(2);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("names impl blocks by their type and keeps each trait impl apart", async () => {
+    const head = base
+      .replace("fn new() -> Self { todo!() }", "fn new() -> Self { unimplemented!() }")
+      .replace("Error::Io }", "Error::Io(e) }")
+      .replace("Error::Fmt }", "Error::Fmt(e) }");
+    const pr = makePR({ "t.rs": base }, { "t.rs": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["t.rs:Sp.new", "t.rs:From<io::Error> for Error.from", "t.rs:From<fmt::Error> for Error.from"]);
+    expect(atoms[1].defines).toEqual(["from", "Error.from", "Error::from"]);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("pairs an impl header whose trait changes from the type's name to Self", async () => {
+    const head = base.replace("impl IntoThing<Thing> for Thing {", "impl IntoThing<Self> for Thing {");
+    const pr = makePR({ "t.rs": base }, { "t.rs": head });
+    const atoms = await atomsOf(pr);
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0].kind).toBe("modified");
+    expect(paths(atoms)).toEqual(["t.rs:IntoThing<Thing> for Thing"]);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("links Type::f() only to that type's own function, and self calls to the impl's type", async () => {
+    const head = base
+      .replace("Thing { n: 0 } }", "Thing { n: 1 } }")
+      .replace("pub fn new() -> Self { Other }", "pub fn new() -> Self { Other {} }")
+      .replace("        self.n += 1;\n", "        self.n += 1;\n        self.helper();\n")
+      .replace("fn helper(&self) {}", "fn helper(&self) { println!() }")
+      .replace("    Thing::new()\n", "    let t = Thing::new();\n    t\n");
+    const pr = makePR({ "t.rs": base }, { "t.rs": head });
+    const atoms = await atomsOf(pr);
+    const edges = edgeNames(atoms);
+    expect(edges).toContain("Thing.new → make");
+    expect(edges).not.toContain("Other.new → make");
+    expect(edges).toContain("Thing.helper → Thing.bump");
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("joins an outer doc comment to its item but leaves module docs alone", async () => {
+    const withModDoc = `//! The crate.\n\n${base}`;
+    const head = withModDoc.replace("//! The crate.", "//! The whole crate.").replace("/// A thing.", "/// A counted thing.");
+    const pr = makePR({ "t.rs": withModDoc }, { "t.rs": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["t.rs:", "t.rs:Thing"]);
+    expectFullCoverage(pr, atoms);
+  });
+});
+
+describe("Java atoms", () => {
+  const base = `package p;
+
+public class A {
+    /** Runs. */
+    public void run() {
+        helper();
+    }
+
+    private void helper() {}
+
+    enum Kind {
+        X, Y;
+
+        String label() { return "k"; }
+
+        static Kind parse(String s) { return X; }
+    }
+}
+
+class B {
+    private void helper() {}
+}
+`;
+
+  it("links unqualified calls to the enclosing class's own method", async () => {
+    const head = base.replace("        helper();\n", "        helper();\n        helper();\n").replace("private void helper() {}\n\n    enum", "private void helper() { run(); }\n\n    enum").replace("class B {\n    private void helper() {}", "class B {\n    private void helper() { }");
+    const pr = makePR({ "A.java": base }, { "A.java": head });
+    const atoms = await atomsOf(pr);
+    const edges = edgeNames(atoms);
+    expect(edges).toContain("A.helper → A.run");
+    expect(edges).not.toContain("B.helper → A.run");
+    expect(atoms.every((a) => a.supportTier === 2)).toBe(true);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("makes methods after an enum's constants members of the enum", async () => {
+    const head = base.replace('return "k";', 'return "kind";').replace("return X;", "return Kind.valueOf(s);");
+    const pr = makePR({ "A.java": base }, { "A.java": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["A.java:A.Kind.label", "A.java:A.Kind.parse"]);
+    expect(atoms[0].defines).toContain("Kind.label");
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("joins a javadoc change to its method and names package lines", async () => {
+    const head = base.replace("/** Runs. */", "/** Runs the job. */");
+    const pr = makePR({ "A.java": base }, { "A.java": head, "C.java": "package p;\n\nclass C {}\n" });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["A.java:A.run", "C.java:package p", "C.java:C"]);
     expectFullCoverage(pr, atoms);
   });
 });

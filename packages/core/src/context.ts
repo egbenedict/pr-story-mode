@@ -178,7 +178,11 @@ export async function retrieveContext(
 
   // Member-only references (`.b`, from `a.b` reads) are too ambiguous to look up as context.
   const useful = (s: string) => s.length > 2 && !s.startsWith(".") && !STOP_NAMES.has(s) && !definedInPR.has(s);
-  const stepRefs = stepAtoms.map((as, i) => [...new Set(as.flatMap((a) => a.references))].filter((r) => useful(r) && uses(changedText[i], bareName(r)) > 0));
+  const refsForContext = (a: ChangeAtom) => {
+    const map = packForPath(a.file)?.contextRef;
+    return map ? a.references.map(map) : a.references;
+  };
+  const stepRefs = stepAtoms.map((as, i) => [...new Set(as.flatMap(refsForContext))].filter((r) => useful(r) && uses(changedText[i], bareName(r)) > 0));
   const modifiedDefs = stepAtoms.map((as) =>
     as.filter((a) => a.kind !== "added").flatMap((a) => a.defines).filter((d) => d.length > 2 && !STOP_NAMES.has(d)),
   );
@@ -384,7 +388,7 @@ function walk(node: Node, path: string[], pack: LanguagePack, out: Unit[], file:
       continue;
     }
     if (pack.isClassLike(t)) {
-      const name = nameOf(child);
+      const name = pack.classNameOf?.(child) ?? nameOf(child);
       if (!name) continue;
       const u = push(child, name, "class");
       const body = child.childForFieldName("body") ?? child.namedChildren.find((c) => c && pack.isBody(c.type)) ?? null;

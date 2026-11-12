@@ -2,6 +2,8 @@
 // Tier 2 packs are hand-tuned; Tier 1 uses generic node-type patterns that work for most grammars;
 // files with no grammar are Tier 0 (one atom per hunk).
 
+import type { Node } from "web-tree-sitter";
+
 export type LanguagePack = {
   id: string;
   tier: 1 | 2;
@@ -19,6 +21,33 @@ export type LanguagePack = {
   /** Comments, decorators and attributes: their lines attach to the next atom. */
   isLeading(type: string): boolean;
   isIdentifier(type: string): boolean;
+
+  // Optional rules for one language. A pack without them gets the generic behaviour.
+  /** The type a function declared outside it belongs to (Go: the method's receiver type). */
+  ownerOf?(fn: Node): string | null;
+  /** The path name of a class-like node, when its `name` field is missing (Rust `impl` blocks). */
+  classNameOf?(node: Node): string | null;
+  /** The type a class path name stands for, for `Type.member` names (Rust `Display for Thing` → `Thing`). */
+  ownerType?(name: string): string;
+  /** The type `self` means inside a class-like node (Rust `impl` blocks). */
+  selfTypeOf?(node: Node): string | null;
+  /**
+   * The node holding a group's entries, each then its own unit (Go `const ( … )`, Java methods after
+   * an enum's constants); null when `node` is no such group.
+   */
+  declList?(node: Node): Node | null;
+  /** A name for a statement the generic rules leave unnamed (Go `package x`). It is always its own atom. */
+  unitName?(node: Node): string | null;
+  /** Whether a changed comment line joins the declaration right below it (doc comments). */
+  docJoins?(line: string): boolean;
+  /** The reference identifier `n` makes: a name, null to skip it, or undefined for the generic rules. */
+  refOf?(n: Node): string | null | undefined;
+  /** Nodes ending at column 0 of a row don't cover that row (Rust doc comments include their newline). */
+  endsAtLineStart?: boolean;
+  /** Members also define `Type::member`, which `Type::member()` references match exactly (Rust). */
+  scopedMembers?: boolean;
+  /** How a reference is looked up as unchanged context (Rust `Type::f` → `Type.f`). */
+  contextRef?(ref: string): string;
 };
 
 const set = (...xs: string[]) => {
@@ -107,9 +136,189 @@ function cFamily(id: string, grammar: string, extensions: string[]): LanguagePac
 export const C = cFamily("c", "c", [".c"]);
 export const CPP = cFamily("cpp", "cpp", [".cpp", ".cc", ".cxx", ".c++", ".h", ".hpp", ".hh", ".hxx", ".inl", ".ipp"]);
 
-export const GO = genericPack("go", "go", [".go"]);
-export const RUST = genericPack("rust", "rust", [".rs"]);
-export const JAVA = genericPack("java", "java", [".java"]);
+// ---- Tier 2 on top of the generic patterns: Go, Rust, Java ----
+
+const firstAncestor = (n: Node, test: (t: string) => boolean): Node | null => {
+  for (let p = n.parent; p; p = p.parent) if (test(p.type)) return p;
+  return null;
+};
+const isField = (p: Node | null, field: string, n: Node) => !!p && p.childForFieldName(field)?.id === n.id;
+/** Doc comments, not file headers or inner docs: Rust `//!` and `/*!` document the enclosing module. */
+const notInnerDoc = (line: string) => !/^\s*(\/\/!|\/\*!)/.test(line);
+
+/** `Client`, `*Client`, `List[T]`, `pkg.Client` → the type's own name. */
+function goType(n: Node | null | undefined): string | null {
+  if (!n) return null;
+  switch (n.type) {
+    case "type_identifier":
+      return n.text;
+    case "pointer_type":
+    case "parenthesized_type":
+      return goType(n.namedChildren[0]);
+    case "generic_type":
+      return goType(n.childForFieldName("type"));
+    case "qualified_type":
+      return n.childForFieldName("name")?.text ?? null;
+  }
+  return null;
+}
+
+/** A Go method's receiver: its variable (`c` in `func (c *Client)`) and type. */
+function goReceiver(fn: Node | null): { name: string | null; type: string } | null {
+  if (fn?.type !== "method_declaration") return null;
+  const p = fn.childForFieldName("receiver")?.namedChildren.find((c) => c?.type === "parameter_declaration");
+  const type = goType(p?.childForFieldName("type"));
+  return type ? { name: p?.childForFieldName("name")?.text ?? null, type } : null;
+}
+
+/** Package names a Go file imports: the alias, or the import path's last part (`…/cli/v2/api` → `api`). */
+const goImports = new WeakMap<object, Set<string>>();
+function goPackages(n: Node): Set<string> {
+  const tree = n.tree;
+  let names = goImports.get(tree);
+  if (names) return names;
+  names = new Set();
+  for (const d of tree.rootNode.namedChildren) {
+    if (d?.type !== "import_declaration") continue;
+    for (const spec of d.descendantsOfType("import_spec")) {
+      if (!spec) continue;
+      const alias = spec.childForFieldName("name")?.text;
+      if (alias) {
+        if (alias !== "_" && alias !== ".") names.add(alias);
+        continue;
+      }
+      const parts = (spec.childForFieldName("path")?.text ?? "").replace(/^["`]|["`]$/g, "").split("/");
+      let last = parts.pop() ?? "";
+      if (/^v\d+$/.test(last) && parts.length) last = parts.pop()!;
+      last = last.replace(/^go-/, "").replace(/[.-]v\d+$/, "").replace(/-go$/, "");
+      if (/^[A-Za-z_]\w*$/.test(last)) names.add(last);
+    }
+  }
+  goImports.set(tree, names);
+  return names;
+}
+
+const GO_BASE = genericPack("go", "go", [".go"]);
+export const GO: LanguagePack = {
+  ...GO_BASE,
+  tier: 2,
+  // `func (c *Client) Send()` belongs to Client: named `Client.Send`.
+  ownerOf: (fn) => goReceiver(fn)?.type ?? null,
+  // `const ( … )`, `var ( … )` and `type ( … )` hold one declaration per entry.
+  declList(node) {
+    if (!/^(const|var|type)_declaration$/.test(node.type)) return null;
+    const holder = node.namedChildren.find((c) => c?.type === "var_spec_list") ?? node;
+    return holder.children.some((c) => c?.type === "(") ? holder : null;
+  },
+  unitName: (node) => (node.type === "package_clause" ? `package ${node.namedChildren[0]?.text ?? ""}`.trim() : null),
+  docJoins: () => true,
+  refOf(n) {
+    if (n.type === "package_identifier") return null; // `api` in `api.Client`
+    const p = n.parent;
+    if (p?.type !== "selector_expression") return undefined;
+    const operand = p.childForFieldName("operand");
+    if (operand?.type !== "identifier") return undefined;
+    if (isField(p, "field", n)) {
+      // `c.flush()` inside a method on Client means Client's own flush.
+      const recv = goReceiver(firstAncestor(n, (t) => t === "method_declaration"));
+      if (recv?.name && operand.text === recv.name) return `${recv.type}.${n.text}`;
+      // `api.Default` names a package-level declaration, called or not.
+      if (goPackages(n).has(operand.text)) return n.text;
+    } else if (operand.id === n.id && goPackages(n).has(n.text)) return null;
+    return undefined;
+  },
+};
+
+/** `Thing`, `Thing<T>`, `&Thing`, `std::sync::Arc<T>` → the type's own name. */
+function rustType(n: Node | null | undefined): string | null {
+  if (!n) return null;
+  switch (n.type) {
+    case "type_identifier":
+    case "primitive_type":
+      return n.text;
+    case "generic_type":
+    case "reference_type":
+    case "pointer_type":
+      return rustType(n.childForFieldName("type"));
+    case "scoped_type_identifier":
+      return n.childForFieldName("name")?.text ?? null;
+  }
+  return null;
+}
+const rustImplType = (n: Node | null): string | null => (n?.type === "impl_item" ? rustType(n.childForFieldName("type")) : null);
+
+const RUST_BASE = genericPack("rust", "rust", [".rs"]);
+export const RUST: LanguagePack = {
+  ...RUST_BASE,
+  tier: 2,
+  // `impl<T> Sp<T>` → `Sp`; `impl From<io::Error> for Error` → `From<io::Error> for Error`, so each trait impl stays apart.
+  classNameOf(node) {
+    if (node.type !== "impl_item") return null;
+    const type = rustType(node.childForFieldName("type"));
+    const trait = node.childForFieldName("trait");
+    if (!type) return null;
+    // `Self` in the trait is the type itself, so `From<Self>` and `From<Thing>` name the same impl.
+    return trait ? `${trait.text.replace(/\s+/g, " ").replace(/\bSelf\b/g, type)} for ${type}` : type;
+  },
+  ownerType: (name) => /\sfor\s(\S+)$/.exec(name)?.[1] ?? name,
+  selfTypeOf: rustImplType,
+  docJoins: notInnerDoc,
+  endsAtLineStart: true,
+  scopedMembers: true,
+  contextRef: (r) => r.replace(/^(\w+)::(\w+)$/, "$1.$2"),
+  refOf(n) {
+    const p = n.parent;
+    // `Thing::new()` and `Self::make()` name one type's own function: `Thing::new`, matched exactly,
+    // never any other type's `new`.
+    const typePath = (s: Node): string | null => {
+      const path = s.childForFieldName("path");
+      if (path?.type !== "identifier") return null;
+      if (path.text === "Self") return rustImplType(firstAncestor(s, (t) => t === "impl_item"));
+      return /^[A-Z]/.test(path.text) ? path.text : null;
+    };
+    if (n.type === "scoped_identifier") {
+      const type = typePath(n);
+      const name = n.childForFieldName("name");
+      return type && name ? `${type}::${name.text}` : undefined;
+    }
+    if (p?.type === "scoped_identifier" && typePath(p)) {
+      if (isField(p, "name", n)) return null; // counted with the type above
+      if (n.text === "Self") return null;
+    }
+    // `Self` as a type or struct literal means the impl's type.
+    if (n.text === "Self") return rustImplType(firstAncestor(n, (t) => t === "impl_item"));
+    return undefined;
+  },
+};
+
+const JAVA_CLASS = /^(class|interface|enum|record|annotation_type)_declaration$/;
+const JAVA_BASE = genericPack("java", "java", [".java"]);
+export const JAVA: LanguagePack = {
+  ...JAVA_BASE,
+  tier: 2,
+  // `enum E { A, B; void helper() {} }`: the methods after the constants are members of E.
+  declList: (node) => (node.type === "enum_body_declarations" ? node : null),
+  unitName: (node) => (node.type === "package_declaration" ? `package ${node.namedChildren.find((c) => c && /identifier$/.test(c.type))?.text ?? ""}`.trim() : null),
+  docJoins: () => true,
+  refOf(n) {
+    const p = n.parent;
+    if (p?.type !== "method_invocation" || !isField(p, "name", n)) return undefined;
+    const obj = p.childForFieldName("object");
+    // `helper()` and `this.helper()` call the enclosing class's own method; `Util.helper()` Util's.
+    if (!obj || obj.type === "this") {
+      for (let a = p.parent; a; a = a.parent) {
+        if (a.type === "class_body" && a.parent?.type === "object_creation_expression") return undefined; // anonymous class
+        if (JAVA_CLASS.test(a.type)) {
+          const name = a.childForFieldName("name")?.text;
+          return name ? `${name}.${n.text}` : undefined;
+        }
+      }
+      return undefined;
+    }
+    if (obj.type === "identifier" && /^[A-Z]/.test(obj.text)) return `${obj.text}.${n.text}`;
+    return undefined;
+  },
+};
 
 /** JSON: one atom per changed top-level key. */
 export const JSON_PACK: LanguagePack = {

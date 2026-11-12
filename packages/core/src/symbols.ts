@@ -58,6 +58,11 @@ export function unitSymbols(nodes: Node[], pack: LanguagePack, tags: Query | nul
 
   const refs = new Set<string>();
   for (const { node, text, key } of used) {
+    const own = pack.refOf?.(node);
+    if (own !== undefined) {
+      if (own !== null) refs.add(own);
+      continue;
+    }
     if (key) {
       refs.add(`.${text}`);
       continue;
@@ -207,6 +212,8 @@ function propertyOf(n: Node): { called: boolean; onSelf: boolean } | null {
 function enclosingClass(n: Node, pack: LanguagePack): string | null {
   for (let p = n.parent; p; p = p.parent) {
     if (pack.isClassLike(p.type)) {
+      const own = pack.selfTypeOf?.(p);
+      if (own) return own;
       const name = p.childForFieldName("name");
       return name ? name.text : null;
     }
