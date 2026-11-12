@@ -8,7 +8,7 @@ Turns a pull request into a narrated story you can read top to bottom.
 
 It comes as a **CLI** (writes an HTML story) and a **Chrome extension** (adds a Story mode button to GitHub pull requests). See the [technical design](https://claude.ai/artifact/8sYLrCQsfX4pGtwiwS4FvP) for the full plan.
 
-**Contents:** [Status](#status) · [Quick start](#quick-start) · [Reader features](#reader-features) · [CLI reference](#cli-reference) · [How it works](#how-it-works) · [Development](#development) · [Benchmarks](#benchmarks) · [Roadmap](#roadmap)
+**Contents:** [Status](#status) · [Quick start](#quick-start) · [Reader features](#reader-features) · [CLI reference](#cli-reference) · [How it works](#how-it-works) · [Development](#development) · [Benchmarks](#benchmarks)
 
 ## Status
 
@@ -16,7 +16,7 @@ It comes as a **CLI** (writes an HTML story) and a **Chrome extension** (adds a 
 |---|---|---|
 | 1. Pipeline | Ingest and parse, atoms, plan and validate, HTML output | ✅ Done |
 | 2. Story quality | Symbol graph, unchanged context, staged ordering, linked issues, grounding check, [60-PR benchmark](#benchmarks) | ✅ Done |
-| 3. Extension | Reader, streaming, settings, caching, review comments, reuse after a push, context from GitHub, GitHub Enterprise, appearance, asking about code | 🚧 In progress: more providers and enterprise policy next |
+| 3. Extension | Reader, streaming, settings, caching, review comments, reuse after a push, context from GitHub, GitHub Enterprise, appearance, asking about code | ✅ Done: published on the Chrome Web Store |
 | 4. Evaluate | 200–500 PR benchmark, model comparison, reviewer study, write-up | Not started |
 
 ## Quick start
@@ -48,6 +48,8 @@ npm run build:extension   # writes packages/extension/dist
 2. Choose **Load unpacked** and pick `packages/extension/dist`.
 3. In the settings page that opens, pick a provider and paste an API key. A GitHub token is optional (needed for private repositories and posting comments).
 4. Open any pull request on github.com and press **Story mode**.
+
+The extension has no servers, accounts or analytics: code goes only to the AI provider you pick, and your GitHub token only to GitHub. See the [privacy policy](PRIVACY.md).
 
 ### Using the CLI at work
 
@@ -85,7 +87,8 @@ The extension's reader opens over the pull request page and runs the whole pipel
 
 - **Streaming:** a loading card shows each stage as it finishes (steps planned, context found, first step written). Then each step appears as soon as it's written, and the one being written streams in.
 - **Top bar:** which step is being written, the time, and tokens and estimated cost. Once written, the cost stays, including questions asked about the code.
-- **Per step:** a reviewed checkbox, a **Raw diff** toggle (code only, as GitHub shows it), and citations that highlight the lines they mention.
+- **Per step:** a reviewed checkbox in the outline and a **Mark step reviewed** button at the end of the step, a **Raw diff** toggle (code only, as GitHub shows it), and citations that highlight the lines they mention.
+- **Line links:** words in an explanation link to the lines they describe. Clicking one scrolls to those lines and highlights them; a dashed underline means the lines are unchanged code.
 - **Expanding code:** buttons above, below and inside each chunk show surrounding lines as GitHub does. Lines changed in other steps are dimmed.
 - **Folding:** re-indented code, long runs of data, repeated edits and deleted files fold behind a one-line summary ([details](#display)).
 - **Banners** when the model failed or new commits were pushed.
@@ -296,7 +299,6 @@ npm run typecheck
 npm run build             # extension and CLI
 npm run build:extension   # packages/extension/dist
 npm run build:cli         # packages/cli/dist
-npm run package:extension # store zip in packages/extension/release (no source maps)
 ```
 
 <details>
@@ -315,17 +317,6 @@ Add `&demo` for a scripted model (`src/reader/demo.ts`) that streams a plausible
 
 - **Content script** (`src/content.ts`): detects PR pages, including GitHub's in-page navigation, and adds one button: in the PR header when it's on screen, otherwise floating at the bottom right. Nothing else on the page changes.
 - **Why an extension page, not the service worker:** Chrome stops idle service workers after about 30 seconds, and one model call can take longer. An extension page in an iframe also keeps GitHub's styles and content security policy out of the reader. The service worker only opens settings and registers buttons on enterprise hosts.
-
-### Publishing the extension
-
-`npm run package:extension` builds a release and zips it for the Chrome Web Store. [`packages/extension/store/STORE.md`](packages/extension/store/STORE.md) has everything the store's dashboard asks for, ready to paste:
-
-- the listing text;
-- a justification for each permission;
-- the privacy answers;
-- screenshots and a promo tile.
-
-The privacy policy is [`PRIVACY.md`](PRIVACY.md), published at [this gist](https://gist.github.com/egbenedict/3c19667ca8fc936adfc44e807461c373).
 
 ## Benchmarks
 
@@ -356,13 +347,3 @@ With unchanged context read from local clones.
 - This measures the pipeline's mechanics, not how good the explanations read; that needs people reading the stories.
 
 Per-PR results: [`bench/results/2026-11-opus-5-5`](bench/results/2026-11-opus-5-5).
-
-## Roadmap
-
-**Phase 3, still open**
-- Bedrock, Vertex and Azure adapters.
-- Enterprise policy settings (managed storage), so IT can preset the extension.
-- Not yet tried in real conditions: GitHub Enterprise on a real server, review comments on a real pull request, and reuse after a push with a real model.
-
-**Phase 4**
-- A 200 to 500 PR benchmark, a model comparison, a seeded-bug reviewer study, and a public write-up.
