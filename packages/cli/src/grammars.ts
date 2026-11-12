@@ -25,6 +25,8 @@ const GRAMMARS: Record<string, string> = {
   go: "tree-sitter-go/tree-sitter-go.wasm",
   rust: "tree-sitter-rust/tree-sitter-rust.wasm",
   java: "tree-sitter-java/tree-sitter-java.wasm",
+  yaml: "@tree-sitter-grammars/tree-sitter-yaml/tree-sitter-yaml.wasm",
+  toml: "@tree-sitter-grammars/tree-sitter-toml/tree-sitter-toml.wasm",
 };
 
 /** Loads grammar .wasm files from the installed tree-sitter-* packages. */

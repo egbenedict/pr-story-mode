@@ -276,12 +276,15 @@ The `hunkLines` of all atoms in the steps and the mechanical list must equal the
 |---|---|---|
 | 2 | TypeScript, TSX, JavaScript, Python | Hand-tuned boundaries: classes, methods, fields, top-level statements, `test("…")` calls |
 | 2 | Go, Rust, Java | Generic node patterns plus each language's own rules (below). A changed doc comment joins the declaration it documents |
-| 1 | C, C++, JSON | Generic node patterns. C/C++ also reads names through declarators and flag macros, and looks through `#if` regions and templates. JSON gets one atom per top-level key |
+| 1 | C, C++, JSON, YAML, TOML | Generic node patterns. C/C++ also reads names through declarators and flag macros, and looks through `#if` regions and templates. JSON gets one atom per top-level key, YAML and TOML as below |
 | 0 | Everything else | One atom per hunk |
 
 - **Go:** methods are named by their receiver (`func (c *Client) Send` is `Client.Send`), so same-named methods on different types stay apart. `c.flush()` inside a method on `Client` links only to `Client.flush`. `api.Limit` links to `Limit` when `api` is an imported package. Each entry of a grouped `const ( … )`, `var ( … )` or `type ( … )` is its own atom.
 - **Rust:** `impl` blocks are named by their type, without generics (`impl<T> Sp<T>` is `Sp`). Each trait impl stays apart (`From<io::Error> for Error`). `Thing::new()` links only to `Thing`'s own `new`, and `self.m()` to the impl's type. Signature lines right below a `///` doc comment belong to their function. Module docs (`//!`) stay on their own.
 - **Java:** `helper()` and `this.helper()` link to the enclosing class's own method, `Util.helper()` to `Util`'s. Methods after an enum's constants are members of the enum.
+- **YAML:** one atom per top-level key, and per key under it when it holds keys (`jobs.build`, `on.push`, `spec.replicas`). The same key in two `---` documents stays apart, named by `kind` and `metadata.name` where there are any (`Deployment web.spec.replicas`). A comment line joins the key below it.
+- **TOML:** one atom per table (`[package]`, `[tool.ruff.lint]`, `[[bin]]`) or top-level key. A comment line joins the table below it.
+- YAML and TOML keys name their atoms but don't link to code of the same name, and config files are never read as context. Lockfiles (`pnpm-lock.yaml`, `Cargo.lock`) stay folded with the mechanical changes.
 
 A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `packages/cli/src/grammars.ts`. A pack's optional rules (receiver owners, grouped declarations, doc comments, references) apply only to that language.
 
@@ -299,7 +302,7 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ### Commands
 
 ```bash
-npm test                  # 165 tests
+npm test                  # 169 tests
 npm run typecheck
 npm run build             # extension and CLI
 npm run build:extension   # packages/extension/dist
@@ -309,7 +312,7 @@ npm run build:cli         # packages/cli/dist
 <details>
 <summary>What the tests cover</summary>
 
-Diff parsing, GitHub ingest, rate-limit errors and review comments, comment formatting, GitHub Enterprise hosts and tokens, model failures, reuse after a push, streaming steps and plan drafts, reading half-written JSON, context from a listed repository and import resolution, atomization (TS, Python, C++, Go, Rust, Java, JSON), classification, re-indent folding, beats, validation, the repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings, appearance, CLI config and key sources, gateway keys that expire, asking about selected code (definitions, citations, carrying answers over a push), and folding data runs, repeated edits and deleted files.
+Diff parsing, GitHub ingest, rate-limit errors and review comments, comment formatting, GitHub Enterprise hosts and tokens, model failures, reuse after a push, streaming steps and plan drafts, reading half-written JSON, context from a listed repository and import resolution, atomization (TS, Python, C++, Go, Rust, Java, JSON, YAML, TOML), classification, re-indent folding, beats, validation, the repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings, appearance, CLI config and key sources, gateway keys that expire, asking about selected code (definitions, citations, carrying answers over a push), and folding data runs, repeated edits and deleted files.
 </details>
 
 ### Working on the reader

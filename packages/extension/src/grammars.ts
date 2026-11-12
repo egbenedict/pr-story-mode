@@ -3,7 +3,7 @@ import { ParserHost, type GrammarLoader, type QueryLoader } from "@prstory/core"
 /** Files are bundled next to the page (build.mjs copies them), so relative URLs work in the extension and in a dev server. */
 const asset = (path: string) => new URL(path, location.href).href;
 
-const GRAMMARS = new Set(["typescript", "tsx", "javascript", "python", "json", "c", "cpp", "go", "rust", "java"]);
+const GRAMMARS = new Set(["typescript", "tsx", "javascript", "python", "json", "c", "cpp", "go", "rust", "java", "yaml", "toml"]);
 
 /** Query files per grammar, as in the CLI: TypeScript's tags only add to JavaScript's, so both are used. */
 const QUERIES: Record<string, string[]> = {

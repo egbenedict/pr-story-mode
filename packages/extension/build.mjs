@@ -24,6 +24,8 @@ const GRAMMARS = {
   go: "tree-sitter-go/tree-sitter-go.wasm",
   rust: "tree-sitter-rust/tree-sitter-rust.wasm",
   java: "tree-sitter-java/tree-sitter-java.wasm",
+  yaml: "@tree-sitter-grammars/tree-sitter-yaml/tree-sitter-yaml.wasm",
+  toml: "@tree-sitter-grammars/tree-sitter-toml/tree-sitter-toml.wasm",
 };
 const QUERY_PACKAGES = ["javascript", "typescript", "python", "c", "cpp", "go", "rust", "java"];
 

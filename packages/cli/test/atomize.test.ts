@@ -496,3 +496,66 @@ class B {
     expectFullCoverage(pr, atoms);
   });
 });
+
+/** Atom names as the reader shows them: placeholder segments like `<document>` left out. */
+const shown = (atoms: ChangeAtom[]) => atoms.map((a) => `${a.file}:${a.symbolPath.filter((s) => !s.startsWith("<")).join(".")}`);
+
+describe("YAML and TOML atoms", () => {
+  const workflow = `name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Build and test on every push.
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm run build
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+`;
+
+  it("splits a workflow by top-level key and by the keys under it, and defines nothing", async () => {
+    const head = workflow.replace("branches: [main]", "branches: [main, next]").replace("npm run build", "npm run build:all").replace("npm test", "npm test -- --ci");
+    const pr = makePR({ ".github/workflows/ci.yml": workflow, "src/build.ts": "export function build() {}\n" }, { ".github/workflows/ci.yml": head, "src/build.ts": "export function build() { return 1; }\n" });
+    const atoms = await atomsOf(pr);
+    expect(shown(atoms)).toEqual([".github/workflows/ci.yml:on.push", ".github/workflows/ci.yml:jobs.build", ".github/workflows/ci.yml:jobs.test", "src/build.ts:build"]);
+    const yaml = atoms.filter((a) => a.file.endsWith(".yml"));
+    expect(yaml.every((a) => a.supportTier === 1 && a.defines.length === 0 && a.references.length === 0)).toBe(true);
+    expect(buildGraph(atoms)).toEqual([]); // the `build` job is not the `build` function
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("joins a comment line to the key below it", async () => {
+    const head = workflow.replace("# Build and test on every push.", "# Build and test on every push and pull request.");
+    const pr = makePR({ "ci.yaml": workflow }, { "ci.yaml": head });
+    const atoms = await atomsOf(pr);
+    expect(shown(atoms)).toEqual(["ci.yaml:jobs.build"]); // the first job under it
+    expect(atoms[0].headRange?.start).toBe(9);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("keeps the same key in two documents apart, named by kind and name", async () => {
+    const base = "kind: Deployment\nmetadata:\n  name: web\nspec:\n  replicas: 2\n---\nkind: Service\nmetadata:\n  name: web\nspec:\n  port: 80\n";
+    const head = base.replace("replicas: 2", "replicas: 3").replace("port: 80", "port: 8080");
+    const pr = makePR({ "k8s/web.yaml": base }, { "k8s/web.yaml": head });
+    const atoms = await atomsOf(pr);
+    expect(shown(atoms)).toEqual(["k8s/web.yaml:Deployment web.spec.replicas", "k8s/web.yaml:Service web.spec.port"]);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("gives TOML one atom per table, joins comments to the table below, and leaves lockfiles mechanical", async () => {
+    const base = 'title = "x"\n\n[package]\nname = "app"\nversion = "1.0.0"\n\n# Runtime dependencies.\n[dependencies]\nserde = "1"\ntokio = "1"\n\n[[bin]]\nname = "app"\n';
+    const head = base.replace('title = "x"', 'title = "y"').replace('version = "1.0.0"', 'version = "1.1.0"').replace("# Runtime dependencies.", "# Runtime dependencies only.").replace('serde = "1"\ntokio = "1"', 'serde = "1.0"\ntokio = "1.40"').replace('[[bin]]\nname = "app"', '[[bin]]\nname = "app-cli"');
+    const pr = makePR({ "Cargo.toml": base, "pnpm-lock.yaml": "lockfileVersion: 9\n" }, { "Cargo.toml": head, "pnpm-lock.yaml": "lockfileVersion: 10\n" });
+    const atoms = await atomsOf(pr);
+    expect(shown(atoms)).toEqual(["Cargo.toml:title", "Cargo.toml:[package]", "Cargo.toml:[dependencies]", "Cargo.toml:[[bin]]", "pnpm-lock.yaml:"]);
+    expect(atoms.find((a) => a.file === "pnpm-lock.yaml")!.mechanical).toBe("lockfile");
+    expect(atoms.filter((a) => a.file === "Cargo.toml").every((a) => a.supportTier === 1 && a.defines.length === 0)).toBe(true);
+    expectFullCoverage(pr, atoms);
+  });
+});

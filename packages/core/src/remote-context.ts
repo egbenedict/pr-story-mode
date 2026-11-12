@@ -154,7 +154,7 @@ function sharedPrefix(a: string, b: string): number {
 export function rankCandidates(pr: PRInput, repo: RepoFile[], opts: RemoteContextOptions = {}): string[] {
   const maxBytes = opts.maxFileBytes ?? 150_000;
   const inPR = new Set(pr.files.flatMap((f) => [f.path, f.oldPath]));
-  const families = new Set(pr.files.map((f) => packForPath(f.path)).flatMap((p) => (p && p.id !== "json" ? [familyOf(p)] : [])));
+  const families = new Set(pr.files.map((f) => packForPath(f.path)).flatMap((p) => (p && p.id !== "json" && !p.data ? [familyOf(p)] : [])));
   const usable = (f: RepoFile) => {
     const pack = packForPath(f.path);
     return !!pack && families.has(familyOf(pack)) && f.size <= maxBytes && !inPR.has(f.path) && !isLockfile(f.path) && !isGeneratedPath(f.path) && !SKIP_DIRS.test(f.path);
@@ -244,7 +244,7 @@ export function remoteContextSource(
       const files = await tree;
       const wanted = new Set(names.map(normName));
       const inPR = new Set(pr.files.map((f) => f.path));
-      const families = new Set(pr.files.map((f) => packForPath(f.path)).flatMap((p) => (p ? [familyOf(p)] : [])));
+      const families = new Set(pr.files.map((f) => packForPath(f.path)).flatMap((p) => (p && !p.data ? [familyOf(p)] : [])));
       const named = files
         .filter((f) => !texts.has(f.path) && !inPR.has(f.path) && wanted.has(normName(stem(f.path))) && f.size <= (opts.maxFileBytes ?? 150_000) && !SKIP_DIRS.test(f.path))
         .filter((f) => {

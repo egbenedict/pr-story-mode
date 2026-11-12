@@ -11,6 +11,8 @@
   "dependencies": {
     "@prstory/core": "0.1.0",
     "@prstory/providers": "0.1.0",
+    "@tree-sitter-grammars/tree-sitter-toml": "^0.7.0",
+    "@tree-sitter-grammars/tree-sitter-yaml": "^0.7.1",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "tree-sitter-c": "^0.24.1",

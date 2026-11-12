@@ -48,6 +48,14 @@ export type LanguagePack = {
   scopedMembers?: boolean;
   /** How a reference is looked up as unchanged context (Rust `Type::f` → `Type.f`). */
   contextRef?(ref: string): string;
+  /** A data format (YAML, TOML): atoms are named by key but define nothing, and are never read as context. */
+  data?: boolean;
+  /** Lines that are only a comment, which count as leading even where the tree puts them inside the key above. */
+  commentLine?(text: string): boolean;
+  /** A key whose entries become atoms of their own, named under it (YAML `jobs:` → `jobs.build`). */
+  nestedKeys?(node: Node): { list: Node; name: string } | null;
+  /** A statement that is always its own atom, never joined with small neighbours (a YAML key holding a block). */
+  isBlock?(node: Node): boolean;
 };
 
 const set = (...xs: string[]) => {
@@ -335,7 +343,92 @@ export const JSON_PACK: LanguagePack = {
   isIdentifier: () => false,
 };
 
-export const LANGUAGE_PACKS: LanguagePack[] = [TYPESCRIPT, TSX, JAVASCRIPT, PYTHON, C, CPP, GO, RUST, JAVA, JSON_PACK];
+/** The text of a YAML scalar node, without quotes. */
+const yamlText = (n: Node | null | undefined) => (n ? n.text.replace(/^["']|["']$/g, "").trim() : "");
+/** The value of key `key` in a YAML mapping node (`block_node` holding a `block_mapping`). */
+function yamlValue(node: Node | null | undefined, key: string): Node | null {
+  const mapping = node?.type === "block_node" ? node.namedChildren.find((c) => c?.type === "block_mapping") : null;
+  for (const pair of mapping?.namedChildren ?? []) {
+    if (pair?.type === "block_mapping_pair" && yamlText(pair.childForFieldName("key")) === key) return pair.childForFieldName("value");
+  }
+  return null;
+}
+
+/** YAML: one atom per changed top-level key, per document. */
+export const YAML_PACK: LanguagePack = {
+  id: "yaml",
+  tier: 1,
+  grammar: "yaml",
+  extensions: [".yaml", ".yml"],
+  // Documents are containers, so the same key in two `---` documents stays apart.
+  isClassLike: set("document"),
+  classNameOf(doc) {
+    if (doc.type !== "document") return null;
+    const docs = (doc.parent?.namedChildren ?? []).filter((d) => d?.type === "document");
+    if (docs.length <= 1) return "<document>";
+    // Kubernetes-style manifests: `kind` and `metadata.name` name the document.
+    const body = doc.namedChildren.find((c) => c?.type === "block_node");
+    const kind = yamlText(yamlValue(body, "kind"));
+    const name = yamlText(yamlValue(yamlValue(body, "metadata"), "name"));
+    if (kind && /^[\w.-]{1,40}$/.test(kind)) return name && /^[\w.-]{1,60}$/.test(name) ? `${kind} ${name}` : kind;
+    return `document ${docs.findIndex((d) => d?.id === doc.id) + 1}`;
+  },
+  isBody: set("block_node"),
+  isFunctionLike: () => false,
+  isWrapper: set("block_mapping", "block_sequence"),
+  isImport: () => false,
+  isLeading: set("comment"),
+  isIdentifier: () => false,
+  // A top-level list item (Ansible tasks, say) is named by its `name`.
+  unitName(node) {
+    if (node.type !== "block_sequence_item") return null;
+    const name = yamlText(yamlValue(node.namedChildren.find((c) => c?.type === "block_node"), "name"));
+    return name ? name.slice(0, 60) : null;
+  },
+  docJoins: () => true,
+  data: true,
+  // The parser files a comment under the key above it; a comment at the start of a line belongs to what follows.
+  commentLine: (text) => /^#/.test(text),
+  // A top-level key holding keys (`jobs:`, `on:`, `spec:`) splits into them: `jobs.build`, `jobs.test`.
+  nestedKeys(node) {
+    if (node.type !== "block_mapping_pair" || node.parent?.parent?.parent?.type !== "document") return null;
+    const name = yamlText(node.childForFieldName("key"));
+    const value = node.childForFieldName("value");
+    const list = value?.type === "block_node" ? value.namedChildren.find((c) => c?.type === "block_mapping") : null;
+    return name && list ? { list, name } : null;
+  },
+  // A key holding a block (a job, a list of steps) stands alone; small `key: value` neighbours may join.
+  isBlock: (node) =>
+    node.type === "block_mapping_pair" &&
+    !!node.childForFieldName("value")?.namedChildren.some((c) => c?.type === "block_mapping" || c?.type === "block_sequence"),
+};
+
+/** TOML: one atom per changed table (`[package]`, `[[bin]]`) or top-level key. */
+export const TOML_PACK: LanguagePack = {
+  id: "toml",
+  tier: 1,
+  grammar: "toml",
+  extensions: [".toml"],
+  isClassLike: () => false,
+  isBody: () => false,
+  isFunctionLike: () => false,
+  isWrapper: () => false,
+  isImport: () => false,
+  isLeading: set("comment"),
+  isIdentifier: () => false,
+  unitName(node) {
+    const key = node.namedChildren.find((c) => c && /_key$/.test(c.type))?.text.replace(/\s+/g, "");
+    if (!key) return null;
+    if (node.type === "table") return `[${key}]`;
+    if (node.type === "table_array_element") return `[[${key}]]`;
+    return node.type === "pair" ? key : null;
+  },
+  docJoins: () => true,
+  data: true,
+  commentLine: (text) => /^\s*#/.test(text),
+};
+
+export const LANGUAGE_PACKS: LanguagePack[] = [TYPESCRIPT, TSX, JAVASCRIPT, PYTHON, C, CPP, GO, RUST, JAVA, JSON_PACK, YAML_PACK, TOML_PACK];
 
 /** Lockfiles and generated files never need a grammar: they go straight to the mechanical list. */
 const LOCKFILES = new Set([

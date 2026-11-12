@@ -335,7 +335,7 @@ export async function retrieveContext(
 
 async function indexFile(path: string, text: string, changed: Set<number>, host: ParserHost, inPR: boolean): Promise<FileIndex | null> {
   const pack = packForPath(path);
-  if (!pack || pack.id === "json") return null;
+  if (!pack || pack.id === "json" || pack.data) return null;
   const tree = await host.parse(pack.grammar, text);
   if (!tree) return null;
   const units: Unit[] = [];

@@ -138,6 +138,7 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
   const located: { line: LineInfo; loc: Location }[] = allLines.map((line) => {
     if (!parsed) return { line, loc: { kind: "none" } as Location };
     if (line.text.trim() === "") return { line, loc: { kind: "none" } as Location };
+    if (pack!.commentLine?.(line.text)) return { line, loc: { kind: "leading" } as Location };
     const tree = line.ref.side === "LEFT" ? baseTree! : headTree!;
     return { line, loc: locate(tree.rootNode, line.ref.line - 1, pack!) };
   });
@@ -170,7 +171,7 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
     const lines = (fileLines[ref.side] ??= ((ref.side === "LEFT" ? file.baseText : file.headText) ?? "").split("\n"));
     for (let r = ref.line; r < lines.length; r++) {
       const loc = locate(tree.rootNode, r, pack);
-      if (loc.kind === "leading") continue; // more of the comment, or another one
+      if (loc.kind === "leading" || pack.commentLine?.(lines[r])) continue; // more of the comment, or another one
       if (lines[r].trim() === "") return null; // a blank line: the comment isn't attached
       return loc.kind === "unit" && loc.named && loc.start === r + 1 ? loc : null;
     }
@@ -218,11 +219,13 @@ export async function atomizeFile(file: PRFile, headSha: string, host: ParserHos
   const out: ChangeAtom[] = [];
   for (const g of mergeDeclarationRuns([...groups.values()])) {
     const defines: string[] = [];
-    if (g.named && !g.isImport)
+    // Keys in a data file (YAML, TOML) name its atoms but define nothing code can use.
+    const data = !!pack?.data;
+    if (g.named && !g.isImport && !data)
       for (const name of g.joinedNames ?? [g.path[g.path.length - 1]])
         if (name && /^[\w$.#:~]+$/.test(name)) defines.push(name.replace(/^.*(\.|::)/, ""));
     let refs = new Set<string>();
-    if (pack && tier > 0) {
+    if (pack && tier > 0 && !data) {
       const nodes = g.headNodes.length ? g.headNodes : g.baseNodes;
       const sym = unitSymbols(nodes, pack, tags);
       refs = sym.refs;
@@ -275,12 +278,23 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
     if (pack.isLeading(t)) return { kind: "leading" };
     if (pack.isImport(t)) return { kind: "import", path: [...path, "<imports>"], node: child };
 
+    // A key whose entries are units of their own, named under it.
+    const nested = pack.nestedKeys?.(child);
+    if (nested) {
+      if (!childAt(nested.list, row, pack)) return row === child.startPosition.row ? { kind: "leading" } : { kind: "none" };
+      path.push(nested.name);
+      node = nested.list;
+      wrapperStart = null; // its entries start where they start, not where an enclosing wrapper did
+      continue;
+    }
+
     // A group of declarations: each entry is its own unit. The group's opening line joins the entry
     // below it, and its closing line the one above.
     const list = pack.declList?.(child);
     if (list) {
       if (!childAt(list, row, pack)) return row === child.startPosition.row ? { kind: "leading" } : { kind: "none" };
       node = list;
+      wrapperStart = null;
       continue;
     }
 
@@ -329,6 +343,7 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
       break;
     }
     unit = { node: child, start, end: child.endPosition.row + 1, named: name !== null, path: name ? [...path, name] : [...path] };
+    if (pack.isBlock?.(child)) unit.block = true;
     break;
   }
 
