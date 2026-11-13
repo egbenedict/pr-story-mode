@@ -33,6 +33,20 @@ How beats work:
 - \`cites\` lists the lines a beat discusses, as the atom ID with the first and last line number. Cite only atoms shown in this request. Set each citation's \`phrase\` to the words in your text that refer to those lines, copied exactly (a few words, such as "count matches with \`memchr\`"); the reader turns that phrase into a link to the lines. Cite the specific lines each phrase is about, so a sentence that walks through several parts of the code links each part.
 - Some steps come with unchanged code the PR did not touch, labeled C1, C2 and so on: a definition the step uses, an existing caller of something the step changes, or the class the code sits in. The reader sees it just above the step. Use it where it explains the change, for example what a called helper returns or which existing callers a new behavior reaches, and cite it with its label (\`atomId\` "C2") and its line numbers. In your text, refer to that code by name, never by its label. Don't walk through the context itself, and never end a beat on a context line. In context, \`>\` marks the lines that mention the linking symbol, and a line followed by \`…\` is the opening line of the code the snippet comes from.`;
 
+/**
+ * Added after EXPLAIN_SYSTEM for More detail. Standard sends EXPLAIN_SYSTEM alone, unchanged.
+ * Same kind of walkthrough, with more of the changed lines tied to the words about them.
+ */
+export const EXPLAIN_MORE_DETAIL = `More detail: the reader asked for a more thorough walkthrough. Keep the same voice, kind of explanation and beat rules, with these changes:
+- Cover nearly every changed line. Instead of skipping lines that need no explanation, give them a short clause, grouping the simple ones together: "we import \`Parser\` and \`Node\` for the walker below", "then we copy the three options onto the instance". Lines that changed only in indentation still get just a clause.
+- Link more of the code: cite each statement, condition, branch or small group of lines that your text talks about, each with its own phrase, so most changed lines are linked from the words that explain them. Keep each citation to the lines its phrase is about instead of stretching one citation over a whole block.
+- Where the code is dense, go one level deeper: the parts of a compound condition, a loop's bounds, or what each argument of a call is for when its name doesn't say.
+- Add background only when a reader would likely be stuck without it: what an unfamiliar library call, API or language feature does, an assumption the code relies on that the snippet doesn't show, or which other code a change reaches, as the unchanged context shows. Keep it to a short sentence next to the code it concerns. Most steps need none, and no step needs more than one or two. Don't add history, alternatives, style remarks or review advice.
+- The word counts in the step headings are larger to make room for this; they are still targets, not quotas. A beat can run to about five sentences, and you can start a new beat a little sooner, but still only at the end of a whole statement or block.`;
+
+/** The system prompt for writing explanations at a detail level. */
+export const explainSystem = (detail: Detail = "standard") => (detail === "more" ? `${EXPLAIN_SYSTEM}\n\n${EXPLAIN_MORE_DETAIL}` : EXPLAIN_SYSTEM);
+
 export const EXPLAIN_SCHEMA: JSONSchema = {
   type: "object",
   additionalProperties: false,
@@ -261,7 +275,7 @@ export async function explainSteps(
     let json: unknown;
     try {
       const res = await completeJson(provider, {
-        system: EXPLAIN_SYSTEM,
+        system: explainSystem(opts.detail),
         sharedPrefix,
         messages: [{ role: "user", content }],
         schema: EXPLAIN_SCHEMA,

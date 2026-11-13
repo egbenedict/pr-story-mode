@@ -123,6 +123,8 @@ export type Story = {
     provider: string;
     repairRounds: number;
     tokens: number;
+    /** Set only for More detail; a story without it was written at Standard. */
+    detail?: "more";
     /** Set when the story was updated from one for an earlier commit: steps carried over, and that commit. */
     reused?: { steps: number; from: string };
   };

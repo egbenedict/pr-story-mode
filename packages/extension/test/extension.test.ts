@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { prUrlOf } from "../src/content";
-import { DEFAULT_SETTINGS, embedAllowed, hostOrigins, missingModelReason, normalizeHost, providerConfig, tokenFor } from "../src/settings";
+import { DEFAULT_SETTINGS, embedAllowed, hostOrigins, missingModelReason, normalizeHost, providerConfig, tokenFor, withDefaults } from "../src/settings";
 import { repoKey } from "../src/cache";
 
 describe("prUrlOf", () => {
@@ -25,6 +25,13 @@ describe("settings", () => {
     const selfHosted = { ...DEFAULT_SETTINGS, provider: "openai-compatible" as const, model: "qwen3-coder", baseURL: "http://localhost:8000/v1" };
     expect(providerConfig(selfHosted)).toMatchObject({ provider: "openai-compatible", model: "qwen3-coder", apiKey: undefined });
     expect(missingModelReason({ ...selfHosted, baseURL: "" })).toMatch(/base URL/);
+  });
+
+  it("uses Standard detail unless More is saved", () => {
+    expect(DEFAULT_SETTINGS.detail).toBe("standard");
+    expect(withDefaults({}).detail).toBe("standard"); // settings saved before the option existed
+    expect(withDefaults({ detail: "more" }).detail).toBe("more");
+    expect(withDefaults({ detail: "thorough" as never }).detail).toBe("standard");
   });
 });
 

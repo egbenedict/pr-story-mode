@@ -91,7 +91,8 @@ The extension's reader opens over the pull request page and runs the whole pipel
 - **Line links:** words in an explanation link to the lines they describe. Clicking one scrolls to those lines and highlights them; a dashed underline means the lines are unchanged code.
 - **Expanding code:** buttons above, below and inside each chunk show surrounding lines as GitHub does. Lines changed in other steps are dimmed.
 - **Folding:** re-indented code, long runs of data, repeated edits and deleted files fold behind a one-line summary ([details](#display)).
-- **Banners** when the model failed or new commits were pushed.
+- **Detail:** Standard walks through what the code does and why, skipping lines that speak for themselves. **More detail** (in settings, or `--detail more` in the CLI) writes the same kind of walkthrough but links nearly every changed line to the words that explain it, and adds background only where the code would be hard to follow without it. It's longer, so it takes a little more time and costs a little more.
+- **Banners** when the model failed, new commits were pushed, or a saved story was written at another detail level than settings now ask for.
 
 ### Ask about this code
 
@@ -138,7 +139,7 @@ Answers cite lines as `[L12]`, `[old L12]` or `[D1 L3-5]`. Citations of lines th
   - Atoms are matched by what their code says, not by line numbers.
   - Unchanged steps keep their explanations, moved to the new line numbers. Changed atoms keep their place and are explained again. New atoms get their own step after what they use, next to a step in the same file when one fits.
   - The ordering call is skipped and the summary kept. The footer says how many steps were kept.
-  - If more than two-thirds of the steps would need explaining, or the new code doesn't fit the old order, the story is made from scratch.
+  - If more than two-thirds of the steps would need explaining, the new code doesn't fit the old order, or the detail level changed, the story is made from scratch.
 
 ### Settings and appearance
 
@@ -171,6 +172,7 @@ Answers cite lines as `[L12]`, `[old L12]` or `[D1 L3-5]`. Citations of lines th
 | `--model`, `--base-url`, `--effort` | Model, gateway or server URL, and Anthropic effort (`low` … `max`) |
 | `--repo <clone>` | With a PR URL: read unchanged context from a local clone instead of GitHub |
 | `--no-context` | Don't show unchanged definitions and callers |
+| `--detail standard\|more` | How much of the code the explanations cover (default `standard`; also `"detail"` in the config file) |
 | `--open` / `--no-open` | Open the story in the browser, or don't |
 | `--out <dir>`, `--token <token>`, `--config <file>` | Output folder, GitHub token, config file |
 
@@ -251,6 +253,7 @@ Each step can show code the PR didn't change, collapsed above the step and label
 
 - Steps are explained in windows sized to the context budget. The PR description and full step order are a shared prefix, so prompt caching reuses them.
 - Each step is a series of **beats**, in the voice of the author walking a colleague through the code: a few sentences, then the 5 to 25 lines they describe. The model picks where each beat ends, and `walkthrough()` cuts the code there; a bad cut point snaps to the nearest valid line.
+- **More detail** adds one instruction after the usual prompt (`EXPLAIN_MORE_DETAIL`) and raises each step's word target by half. Standard sends exactly the same prompt as before the setting existed.
 - Context snippets are labelled `C1`, `C2`… and can be cited. A **grounding check** drops citations that point outside the window's code or context.
 
 ### Display
@@ -302,7 +305,7 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ### Commands
 
 ```bash
-npm test                  # 169 tests
+npm test                  # 174 tests
 npm run typecheck
 npm run build             # extension and CLI
 npm run build:extension   # packages/extension/dist

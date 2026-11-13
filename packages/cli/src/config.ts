@@ -32,6 +32,8 @@ export type Config = {
   open?: boolean;
   /** Show unchanged code (definitions, callers) beside steps. Its snippets go to the model too. */
   context?: boolean;
+  /** How much of the code the explanations cover: "standard" (the default) or "more". */
+  detail?: "standard" | "more";
 };
 
 export function configPath(flag?: string): string {
@@ -104,6 +106,7 @@ export function validateConfig(raw: unknown): string[] {
   if (c.outDir !== undefined && typeof c.outDir !== "string") out.push("outDir should be a folder path");
   if (c.open !== undefined && typeof c.open !== "boolean") out.push("open should be true or false");
   if (c.context !== undefined && typeof c.context !== "boolean") out.push("context should be true or false");
+  if (c.detail !== undefined && c.detail !== "standard" && c.detail !== "more") out.push('detail should be "standard" or "more"');
   return out;
 }
 

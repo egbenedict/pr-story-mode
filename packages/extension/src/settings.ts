@@ -11,6 +11,8 @@ export type Settings = {
   /** How an Anthropic key is sent: x-api-key (the API and most gateways) or Authorization: Bearer. */
   keyHeader: "x-api-key" | "bearer";
   effort: "" | "low" | "medium" | "high" | "xhigh" | "max";
+  /** How much of the code the explanations cover. */
+  detail: "standard" | "more";
   githubToken: string; // for github.com
   /** GitHub Enterprise Server or Cloud (`acme.ghe.com`) hosts, each with its own token. */
   enterprise: EnterpriseHost[];
@@ -20,7 +22,7 @@ export type Settings = {
 
 export type EnterpriseHost = { host: string; token: string };
 
-export const DEFAULT_SETTINGS: Settings = { provider: "anthropic", model: "", apiKey: "", baseURL: "", keyHeader: "x-api-key", effort: "", githubToken: "", enterprise: [], appearance: DEFAULT_APPEARANCE };
+export const DEFAULT_SETTINGS: Settings = { provider: "anthropic", model: "", apiKey: "", baseURL: "", keyHeader: "x-api-key", effort: "", detail: "standard", githubToken: "", enterprise: [], appearance: DEFAULT_APPEARANCE };
 
 /** "https://GitHub.Acme.com/org/repo" or "github.acme.com" → "github.acme.com"; null when it isn't a host name (or is github.com). */
 export function normalizeHost(input: string): string | null {
@@ -80,6 +82,7 @@ export function withDefaults(saved: Partial<Settings> | undefined): Settings {
   const s = { ...DEFAULT_SETTINGS, ...saved };
   return {
     ...s,
+    detail: s.detail === "more" ? "more" : "standard",
     enterprise: Array.isArray(s.enterprise) ? s.enterprise.filter((e) => e && typeof e.host === "string") : [],
     appearance: withAppearanceDefaults(s.appearance),
   };

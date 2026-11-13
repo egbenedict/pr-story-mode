@@ -153,7 +153,17 @@ type Live = {
   result?: PipelineResult;
   stale?: string;
   problem?: string;
+  /** Set when a saved story was written at another detail level than settings now ask for. */
+  detailNote?: string;
 };
+
+/** Why a saved story doesn't match the detail level in settings, or undefined when it does. */
+function detailMismatch(story: PipelineResult["story"], s: Settings): string | undefined {
+  if (story.meta.provider === "none" || (story.meta.detail ?? "standard") === s.detail) return undefined;
+  return s.detail === "more"
+    ? "This story was written at Standard detail, and settings now ask for More detail. Regenerate it to link more of the code to its explanation."
+    : "This story was written with More detail, and settings now ask for Standard. Regenerate it to write it at Standard.";
+}
 
 const zeroUsage = (): Required<Usage> => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
 
@@ -398,6 +408,7 @@ function App() {
         provider,
         contextSource,
         previous,
+        detail: settings.detail,
         onEvent: (e) => {
           if (e.type === "atoms") setPrep((p) => ({ ...p, stage: 2, atoms: { n: e.atoms, mechanical: e.mechanical } }));
           if (e.type === "order-draft") setPrep((p) => (p.planned === e.labels.length ? p : { ...p, planned: e.labels.length }));
@@ -470,7 +481,7 @@ function App() {
           head && head !== cached.headSha
             ? `New commits were pushed since this story was written (it covers ${cached.headSha.slice(0, 7)}; the PR is now at ${head.slice(0, 7)}). Regenerating keeps the steps whose code didn't change and explains only the rest.`
             : undefined;
-        setLive({ view: viewOf(cached.pr, r), writing: null, usage: r.metrics.usage, model: r.story.meta.model, provider: r.story.meta.provider, result: r, stale });
+        setLive({ view: viewOf(cached.pr, r), writing: null, usage: r.metrics.usage, model: r.story.meta.model, provider: r.story.meta.provider, result: r, stale, detailNote: detailMismatch(r.story, settings) });
         return;
       }
       const reason = missingModelReason(settings);
@@ -541,9 +552,9 @@ function App() {
       {live && !live.writing ? (
         <button
           type="button"
-          className={`tb${live.stale ? " attn" : ""}`}
+          className={`tb${live.stale || live.detailNote ? " attn" : ""}`}
           onClick={() => void generate()}
-          title={live.stale ? "New commits were pushed: update the story" : "Write the story again"}
+          title={live.stale ? "New commits were pushed: update the story" : live.detailNote ? "Write the story again at the detail level in settings" : "Write the story again"}
           aria-label="Regenerate"
         >
           <Icon name="regenerate" />
@@ -579,7 +590,8 @@ function App() {
       <>
         {r.coverage.ok ? `All ${r.coverage.totalLines} changed lines are shown exactly once.` : `Coverage check failed: ${r.coverage.missing.length} missing, ${r.coverage.duplicated.length} duplicated lines.`}
         <br />
-        Generated with {r.story.meta.provider === "none" ? "no model (dependency order and template text)" : `${r.story.meta.provider} · ${r.story.meta.model}`} · {costText(r.story.meta.model, r.metrics.usage)} · {r.story.meta.repairRounds} repair round
+        Generated with {r.story.meta.provider === "none" ? "no model (dependency order and template text)" : `${r.story.meta.provider} · ${r.story.meta.model}`}
+        {r.story.meta.detail === "more" ? " · more detail" : ""} · {costText(r.story.meta.model, r.metrics.usage)} · {r.story.meta.repairRounds} repair round
         {r.story.meta.repairRounds === 1 ? "" : "s"}
         {r.metrics.fallbackOrder && r.story.meta.provider !== "none" ? " · fell back to dependency order" : ""}
         {r.story.meta.reused ? (
@@ -602,9 +614,9 @@ function App() {
           Try again
         </button>
       </div>
-    ) : live.stale ? (
+    ) : live.stale || live.detailNote ? (
       <div className="banner">
-        <span>{live.stale}</span>
+        <span>{live.stale ?? live.detailNote}</span>
         <button type="button" onClick={() => void generate()}>
           Regenerate
         </button>

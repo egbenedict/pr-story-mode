@@ -86,7 +86,7 @@ export async function runPipeline(
      * its code is unchanged, its order is kept and only steps with changed code are explained again.
      */
     previous?: PreviousStory | null;
-    /** How much the explanations say (default standard). */
+    /** How much of the code the explanations cover (default standard). */
     detail?: Detail;
   },
 ): Promise<PipelineResult> {
@@ -106,7 +106,8 @@ export async function runPipeline(
 
   emit({ type: "stage", stage: "order" });
   const prev = opts.previous;
-  const sameModel = !!prev && !!opts.provider && prev.story.meta.provider === opts.provider.id && prev.story.meta.model === opts.provider.model;
+  // Steps are carried over only from a story written by the same model at the same detail level.
+  const sameModel = !!prev && !!opts.provider && prev.story.meta.provider === opts.provider.id && prev.story.meta.model === opts.provider.model && (prev.story.meta.detail ?? "standard") === (opts.detail ?? "standard");
   const reuse = sameModel ? planFromPrevious(prev!, pr, atoms, edges) : null;
   const order: OrderResult = reuse
     ? { plan: reuse.plan, repairRounds: 0, fallback: false, errors: [], tokens: 0, summarized: null }
@@ -158,6 +159,7 @@ export async function runPipeline(
       provider: opts.provider?.id ?? "none",
       repairRounds: order.repairRounds,
       tokens: order.tokens + stats.tokens,
+      ...(opts.provider && opts.detail === "more" ? { detail: "more" as const } : {}),
       ...(reuse && prev ? { reused: { steps: reused.size, from: prev.story.headSha } } : {}),
     },
   };

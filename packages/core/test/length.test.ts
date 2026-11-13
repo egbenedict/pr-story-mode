@@ -25,9 +25,11 @@ describe("step word budget", () => {
   });
 
   it("scales with the detail level and rounds to fives", () => {
-    expect(stepWordBudget([atom(20)], "brief")).toBe(40); // 70 × 0.6 = 42
-    expect(stepWordBudget([atom(20)], "thorough")).toBe(110); // 70 × 1.6 = 112
-    expect(stepWordBudget([atom(500)], "thorough")).toBe(320);
+    expect(stepWordBudget([atom(20)], "standard")).toBe(70);
+    expect(stepWordBudget([atom(20)], "more")).toBe(105); // 70 × 1.5
+    expect(stepWordBudget([atom(21)], "more")).toBe(110); // 72 × 1.5 = 108
+    expect(stepWordBudget([atom(500)], "more")).toBe(300);
+    expect(stepWordBudget([atom(0, 400, { deletedFile: { names: ["a"] }, kind: "removed" })], "more")).toBe(60);
   });
 });
 

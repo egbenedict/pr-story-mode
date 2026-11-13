@@ -12,6 +12,11 @@ const PROVIDERS: { id: ProviderName; label: string; hint: string }[] = [
   { id: "none", label: "No model", hint: "Stories use dependency order and short template descriptions. Nothing is sent anywhere except GitHub." },
 ];
 
+const DETAIL: { id: Settings["detail"]; label: string; hint: string }[] = [
+  { id: "standard", label: "Standard", hint: "Walks through what the code does and why, skipping lines that speak for themselves." },
+  { id: "more", label: "More detail", hint: "The same kind of walkthrough, with nearly every changed line linked to the words that explain it, and background where the code would be hard to follow without it. Longer, so stories take a little more time and cost." },
+];
+
 /** Hosts the extension can reach without asking: the public APIs in the manifest. Others need a grant. */
 const BUILT_IN_HOSTS = ["api.anthropic.com", "api.openai.com"];
 
@@ -183,6 +188,20 @@ function Options() {
             ) : null}
           </>
         ) : null}
+      </fieldset>
+
+      <fieldset>
+        <legend>Explanations</legend>
+        {DETAIL.map((d) => (
+          <label className="radio" key={d.id}>
+            <input type="radio" name="detail" checked={s.detail === d.id} onChange={() => set("detail", d.id)} />
+            <span>
+              {d.label}
+              <br />
+              <span className="hint">{d.hint}</span>
+            </span>
+          </label>
+        ))}
       </fieldset>
 
       <fieldset>

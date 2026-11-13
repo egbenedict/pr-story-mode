@@ -32,6 +32,12 @@ describe("config", () => {
     expect(problems.join("\n")).toMatch(/open/);
   });
 
+  it("accepts a detail level of standard or more, and nothing else", () => {
+    expect(validateConfig({ detail: "standard" })).toEqual([]);
+    expect(validateConfig({ detail: "more" })).toEqual([]);
+    expect(validateConfig({ detail: "thorough" })).toEqual(['detail should be "standard" or "more"']);
+  });
+
   it("is saved readable only by you, and a broken file is reported, not ignored", () => {
     const dir = mkdtempSync(join(tmpdir(), "prs-"));
     const path = join(dir, "nested", "config.json");

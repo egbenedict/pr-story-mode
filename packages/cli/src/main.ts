@@ -16,6 +16,7 @@ import {
   modelFailure,
   parsePrUrl,
   runPipeline,
+  type Detail,
   type PipelineResult,
   type PRInput,
 } from "@prstory/core";
@@ -60,6 +61,7 @@ Options (each overrides the saved setup for one run):
   --token <token>       GitHub token
   --repo <dir>          With a PR URL: a local clone to read unchanged context from (else it's read from GitHub)
   --no-context          Don't show unchanged definitions and callers beside steps
+  --detail <level>      standard, or more: link nearly every changed line to the words about it
   --open / --no-open    Open the story in the browser, or don't
   --config <file>       Use this config file
 
@@ -91,6 +93,7 @@ async function main() {
       "max-lines": { type: "string" },
       shas: { type: "string" },
       "no-context": { type: "boolean" },
+      detail: { type: "string" },
       "no-fallbacks": { type: "boolean" },
       config: { type: "string" },
       open: { type: "boolean" },
@@ -119,6 +122,13 @@ async function main() {
 
 type Values = Record<string, string | boolean | undefined>;
 const str = (v: Values, k: string) => (typeof v[k] === "string" ? (v[k] as string) : undefined);
+
+/** The detail level: --detail, else the saved setup, else standard. */
+function detailFrom(v: Values, config: Config): Detail {
+  const d = str(v, "detail") ?? config.detail ?? "standard";
+  if (d !== "standard" && d !== "more") throw new Error(`--detail should be "standard" or "more", not "${d}".`);
+  return d;
+}
 
 function providerFrom(v: Values, config: Config) {
   const choice = chooseModel(v, config);
@@ -196,6 +206,7 @@ function githubLinker(pr: PRInput) {
 }
 
 async function storyCmd(target: string | undefined, v: Values, config: Config) {
+  const detail = detailFrom(v, config);
   const provider = providerFrom(v, config);
   process.stderr.write("Reading the pull request…\n");
   const pr = await loadInput(target, v, config);
@@ -207,6 +218,7 @@ async function storyCmd(target: string | undefined, v: Values, config: Config) {
     provider,
     contextSource: noContext ? null : await contextSourceFor(pr, v, config, target),
     noContext,
+    detail,
     onEvent: (e) => {
       if (e.type === "stage" && e.stage !== "done") process.stderr.write(`  ${e.stage}…\n`);
       if (e.type === "summarize") process.stderr.write(`    summarized batch ${e.done} of ${e.total}\n`);
@@ -258,6 +270,7 @@ async function benchCmd(v: Values, config: Config) {
   const mode = str(v, "mode") ?? "merges";
   const minLines = +(str(v, "min-lines") ?? 1);
   const maxLines = +(str(v, "max-lines") ?? 100000);
+  const detail = detailFrom(v, config);
   const provider = providerFrom({ provider: "none", ...v }, config);
   const host = createHost();
 
@@ -283,7 +296,7 @@ async function benchCmd(v: Values, config: Config) {
     const changed = pr.files.reduce((n, f) => n + f.hunks.reduce((k, h) => k + h.lines.filter((l) => l.type !== "context").length, 0), 0);
     if (!shaList.length && (changed < minLines || changed > maxLines)) continue;
     ran++;
-    const r = await runPipeline(pr, { host, provider, contextSource: v["no-context"] === true ? null : localContextSource(dir, pr.headSha), noContext: v["no-context"] === true });
+    const r = await runPipeline(pr, { host, provider, contextSource: v["no-context"] === true ? null : localContextSource(dir, pr.headSha), noContext: v["no-context"] === true, detail });
     if (r.coverage.ok) passed++;
     const m = r.metrics;
     const failure = modelFailure(r);

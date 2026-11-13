@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atomizePR, buildGraph, classifyAtoms, EXPLAIN_SYSTEM, modelFailure, ORDER_SYSTEM, planFromPrevious, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
+import { atomizePR, buildGraph, classifyAtoms, EXPLAIN_MORE_DETAIL, EXPLAIN_SYSTEM, explainSystem, modelFailure, ORDER_SYSTEM, planFromPrevious, runPipeline, validatePlan, type CompletionRequest, type PRInput } from "@prstory/core";
 import { MockProvider } from "@prstory/providers";
 import { createHost } from "../src/grammars";
 import { renderStoryHtml } from "../src/render";
@@ -252,16 +252,37 @@ describe("explanation length", () => {
     expect(r.metrics.words).toBe(24);
   });
 
-  it("scales the word target with the detail level", async () => {
+  it("sends Standard's prompt unchanged, and More detail's addition and larger word targets only when asked", async () => {
     const { clamp, run, fmt } = await setup();
-    const target = async (detail?: "brief" | "thorough") => {
+    const runAt = async (detail?: "standard" | "more") => {
       const provider = new MockProvider([plan([{ atomIds: [clamp], label: "Add clamp" }, { atomIds: [run], label: "Use clamp in run" }], [fmt]), explainAll]);
-      await runPipeline(pr, { host, provider, detail });
-      return +/## Step 1: Add clamp \(about (\d+) words\)/.exec(provider.requests[1].messages[0].content)![1];
+      const r = await runPipeline(pr, { host, provider, detail });
+      const words = +/## Step 1: Add clamp \(about (\d+) words\)/.exec(provider.requests[1].messages[0].content)![1];
+      return { r, req: provider.requests[1], words };
     };
-    const [brief, standard, thorough] = [await target("brief"), await target(), await target("thorough")];
-    expect(brief).toBeLessThan(standard);
-    expect(thorough).toBeGreaterThan(standard);
+    const [unset, standard, more] = [await runAt(), await runAt("standard"), await runAt("more")];
+    expect(unset.req.system).toBe(EXPLAIN_SYSTEM);
+    expect(standard.req.system).toBe(EXPLAIN_SYSTEM);
+    expect(standard.req.messages).toEqual(unset.req.messages);
+    expect(standard.r.story.meta).not.toHaveProperty("detail");
+    expect(more.req.system).toBe(`${EXPLAIN_SYSTEM}\n\n${EXPLAIN_MORE_DETAIL}`);
+    expect(more.req.system).toBe(explainSystem("more"));
+    expect(more.words).toBeGreaterThan(standard.words);
+    expect(more.r.story.meta.detail).toBe("more");
+    expect(more.r.coverage.ok).toBe(true);
+  });
+
+  it("asks More detail to link more lines and to add background only when it is needed", () => {
+    expect(EXPLAIN_MORE_DETAIL).toContain("Cover nearly every changed line");
+    expect(EXPLAIN_MORE_DETAIL).toContain("so most changed lines are linked from the words that explain them");
+    expect(EXPLAIN_MORE_DETAIL).toContain("Add background only when a reader would likely be stuck without it");
+    expect(EXPLAIN_MORE_DETAIL).toContain("Most steps need none");
+    expect(EXPLAIN_SYSTEM).not.toContain("More detail");
+  });
+
+  it("doesn't mark a story written without a model as More detail", async () => {
+    const r = await runPipeline(pr, { host, provider: null, detail: "more" });
+    expect(r.story.meta).not.toHaveProperty("detail");
   });
 
   it("tells the planner to organize by the change's structure, not a step count", () => {
@@ -330,11 +351,11 @@ describe("reusing the previous story after a push", () => {
     { title: "Clamp run() output" },
   );
 
-  async function first() {
+  async function first(detail?: "more") {
     const atoms = classifyAtoms(v1, await atomizePR(v1, host));
     const id = (s: string) => atoms.find((a) => a.symbolPath.includes(s))!.id;
     const provider = new MockProvider([plan([{ atomIds: [id("clamp")], label: "Add clamp" }, { atomIds: [id("run")], label: "Use clamp in run" }], []), explainAll]);
-    const r = await runPipeline(v1, { host, provider });
+    const r = await runPipeline(v1, { host, provider, detail });
     return { pr: v1, atoms: r.atoms, story: r.story };
   }
 
@@ -379,6 +400,31 @@ describe("reusing the previous story after a push", () => {
     const edges = buildGraph(atoms);
     expect(planFromPrevious(prev, v2, atoms, edges, { maxChangedShare: 0.3 })).toBeNull(); // 2 of 3 steps changed
     expect(planFromPrevious(prev, v2, atoms, edges)?.changed).toEqual([1, 2]);
+  });
+
+  it("orders from scratch when the detail level changed, and keeps steps when it didn't", async () => {
+    const prev = await first(); // Standard
+    const atoms = classifyAtoms(v2, await atomizePR(v2, host));
+    const id = (s: string) => atoms.find((a) => a.symbolPath.includes(s))!.id;
+    const fresh = () => new MockProvider([plan([{ atomIds: [id("clamp")], label: "Add clamp" }, { atomIds: [id("twice")], label: "Add twice" }, { atomIds: [id("run")], label: "Use it" }], []), explainAll]);
+
+    const toMore = fresh();
+    const r1 = await runPipeline(v2, { host, provider: toMore, previous: prev, detail: "more" });
+    expect(toMore.requests).toHaveLength(2);
+    expect(r1.story.meta.reused).toBeUndefined();
+
+    const more = await first("more");
+    const backToStandard = fresh();
+    const r2 = await runPipeline(v2, { host, provider: backToStandard, previous: more });
+    expect(backToStandard.requests).toHaveLength(2);
+    expect(r2.story.meta.reused).toBeUndefined();
+
+    const stillMore = new MockProvider([explainAll]);
+    const r3 = await runPipeline(v2, { host, provider: stillMore, previous: more, detail: "more" });
+    expect(stillMore.requests).toHaveLength(1); // explain only, no order call
+    expect(stillMore.requests[0].system).toBe(explainSystem("more"));
+    expect(r3.story.meta.reused).toEqual({ steps: 1, from: v1.headSha });
+    expect(r3.story.meta.detail).toBe("more");
   });
 });
 

@@ -301,7 +301,7 @@ ${steps}
 ${mechanical}
 <footer>
   ${esc(coverageText)}<br>
-  Generated with ${esc(story.meta.provider === "none" ? "no LLM (dependency order and template text)" : `${story.meta.provider} · ${story.meta.model}`)} · ${story.meta.tokens.toLocaleString()} tokens${cost} · ${story.meta.repairRounds} repair round${story.meta.repairRounds === 1 ? "" : "s"}${metrics.fallbackOrder && story.meta.provider !== "none" ? " · fell back to dependency order" : ""}
+  Generated with ${esc(story.meta.provider === "none" ? "no LLM (dependency order and template text)" : `${story.meta.provider} · ${story.meta.model}`)}${story.meta.detail === "more" ? " · more detail" : ""} · ${story.meta.tokens.toLocaleString()} tokens${cost} · ${story.meta.repairRounds} repair round${story.meta.repairRounds === 1 ? "" : "s"}${metrics.fallbackOrder && story.meta.provider !== "none" ? " · fell back to dependency order" : ""}
 </footer>
 </main>
 </div>

@@ -1,9 +1,12 @@
 import { lineCounts } from "./snippet";
 import type { ChangeAtom } from "./types";
 
-/** How much the explanations say: Brief and Thorough scale the word budgets of Standard. */
-export type Detail = "brief" | "standard" | "thorough";
-export const DETAIL_SCALE: Record<Detail, number> = { brief: 0.6, standard: 1, thorough: 1.6 };
+/**
+ * How much of the code the explanations cover. More links nearly every changed line to the words
+ * about it (see EXPLAIN_MORE_DETAIL), so it gets a larger word budget than Standard.
+ */
+export type Detail = "standard" | "more";
+export const DETAIL_SCALE: Record<Detail, number> = { standard: 1, more: 1.5 };
 
 /** Word budget for one step: a base plus a little per changed line, capped. */
 export const BUDGET = { base: 30, perLine: 2, max: 200, deletedFile: 40, min: 15 };
