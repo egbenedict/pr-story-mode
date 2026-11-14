@@ -22,7 +22,7 @@ import {
   type WalkChunk,
 } from "@prstory/core";
 import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { AskProvider, AskRows, type AskOptions } from "./ask";
+import { AskProvider, AskRows, AskTip, type AskOptions } from "./ask";
 import { CommentButton, LineComments, useComments } from "./comments";
 
 /** What the reader shows; `steps[i]` is undefined until step i has been written. */
@@ -839,7 +839,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra, ask }:
 
   return (
     <StoryCtx.Provider value={{ byId, snippets, files, fileView, link, hl, setHl }}>
-      <AskProvider view={view} options={writing ? undefined : ask} highlight={setHl}>
+      <AskProvider view={view} options={ask} highlight={setHl}>
       <div className="layout">
         <nav className="rail" aria-label="Story outline">
           <h2>Outline</h2>
@@ -906,6 +906,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra, ask }:
               · head {view.headSha.slice(0, 7)} · {total} steps · {changedLines} changed lines
             </p>
             {headerExtra}
+            <AskTip />
             <div className="summary">
               <Blocks text={view.summary} />
             </div>

@@ -96,7 +96,7 @@ The extension's reader opens over the pull request page and runs the whole pipel
 
 ### Ask about this code
 
-Select lines in a step's code (or in unchanged code beside it). A bar offers **Explain** (a walkthrough) or **Ask…** (your own question).
+Highlight lines in a step's code (or in unchanged code beside it). A bar offers **Explain** (a walkthrough) or **Ask…** (your own question). This works as soon as the first step shows, while later steps are still being written. A tip under the story's title says so until it's dismissed; it shows only when a model is set up.
 
 - The answer streams into a panel under the last selected line.
 - **Line references** like `L12` highlight the code. References to definitions, labelled by name (`clamp L3–5`), open that code under the paragraph that cites them.

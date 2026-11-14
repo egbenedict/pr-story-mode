@@ -500,8 +500,9 @@ function App() {
     ...(live && live.provider !== "none" ? [`Writing this story with ${live.model}: ${costSoFar(live.model, live.usage)}`] : []),
     ...askSpent.map((a) => `Questions with ${a.model}: ${costSoFar(a.model, a.usage)}`),
   ].join("\n");
+  // Code can be asked about as soon as the first step shows, while the rest are still being written.
   const ask: AskOptions | undefined =
-    ref && live && !live.writing
+    ref && live
       ? {
           unavailable: askOff,
           getProvider: async () => {

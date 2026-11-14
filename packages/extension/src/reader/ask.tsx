@@ -123,9 +123,14 @@ export function AskProvider({ view, options, highlight, children }: { view: Stor
   latest.current = threads;
   const files = useMemo(() => new Map(view.pr.files.map((f) => [f.path, f])), [view.pr]);
   const byId = useMemo(() => new Map(view.atoms.map((a) => [a.id, a])), [view.atoms]);
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  // Questions can be asked while later steps are still being written; saved answers wait for the
+  // whole story, since carrying them over to a new commit needs every step's code.
+  const complete = view.steps.length === view.plan.length && view.steps.every(Boolean);
 
   // Saved answers: as they were for this commit, or carried over from an earlier one when their
-  // lines still read the same and the story still shows them.
+  // lines still read the same and the story still shows them. Questions asked before they load are kept.
   useEffect(() => {
     loaded.current = false;
     const key = options?.storeKey;
@@ -133,17 +138,21 @@ export function AskProvider({ view, options, highlight, children }: { view: Stor
       loaded.current = true;
       return;
     }
+    if (!complete) return;
     let cancelled = false;
     void getAsks<Thread>(key).then((saved) => {
       if (cancelled) return;
-      if (saved?.headSha === view.headSha) setThreads(saved.threads.map((t) => ({ ...t, open: t.open ?? true })));
-      else if (saved) setThreads(saved.threads.map((t) => carryOver(t, view, files)).filter((t): t is Thread => !!t));
+      const v = viewRef.current;
+      const restored = !saved ? [] : saved.headSha === v.headSha ? saved.threads.map((t) => ({ ...t, open: t.open ?? true })) : saved.threads.map((t) => carryOver(t, v, new Map(v.pr.files.map((f) => [f.path, f])))).filter((t): t is Thread => !!t);
+      const ids = new Set(restored.map((t) => t.id));
+      latest.current = [...restored, ...latest.current.filter((t) => !ids.has(t.id))];
+      setThreads(latest.current);
       loaded.current = true;
     });
     return () => {
       cancelled = true;
     };
-  }, [options?.storeKey, view.headSha, view.atoms, files]);
+  }, [options?.storeKey, view.headSha, complete]);
 
   // Saved whenever they change (not while an answer is still streaming in).
   const busy = Object.values(status).some(Boolean);
@@ -387,6 +396,45 @@ function AskBar() {
         </>
       )}
     </div>
+  );
+}
+
+// ---- A reminder at the top of the story ----
+
+const TIP_KEY = "prstory:askTipHidden";
+
+/** A one-line reminder that any code in the story can be selected and asked about, until it's dismissed. */
+export function AskTip() {
+  const api = useAsk();
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return localStorage.getItem(TIP_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  if (!api || api.unavailable || hidden) return null;
+  return (
+    <p className="ask-tip">
+      <Icon name="sparkle" />
+      <span>Highlight any lines of code in the story to have them explained, or to ask your own question about them.</span>
+      <button
+        type="button"
+        className="ask-tip-close"
+        aria-label="Hide this tip"
+        title="Hide this tip"
+        onClick={() => {
+          setHidden(true);
+          try {
+            localStorage.setItem(TIP_KEY, "1");
+          } catch {
+            // only this page forgets it
+          }
+        }}
+      >
+        <Icon name="close" />
+      </button>
+    </p>
   );
 }
 
@@ -713,6 +761,11 @@ function AnswerText({ text, t, turn, peek, setPeek }: { text: string; t: Thread 
 
 export const ASK_CSS = `
 /* Ask about this code */
+.ask-tip { display: flex; align-items: center; gap: 8px; width: fit-content; max-width: 72ch; margin: 12px 0 18px; padding: 6px 6px 6px 10px; border-radius: 8px; font-size: 13px; color: var(--muted); background: color-mix(in srgb, var(--accent) 7%, transparent); }
+.ask-tip > .icon { flex: none; color: var(--accent); }
+.ask-tip-close { all: unset; flex: none; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 5px; cursor: pointer; color: var(--muted); }
+.ask-tip-close:hover, .ask-tip-close:focus-visible { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); }
+.ask-tip-close .icon { width: 12px; height: 12px; }
 .ask-bar { position: fixed; z-index: 50; display: flex; gap: 2px; align-items: center; padding: 3px; border-radius: 9px; background: var(--panel); border: 1px solid var(--line); box-shadow: 0 6px 22px rgba(0,0,0,.16), 0 1px 3px rgba(0,0,0,.08); animation: fade-up .14s ease-out; }
 .ask-bar button { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 6px; font: 500 13px var(--sans); color: var(--ink); cursor: pointer; white-space: nowrap; }
 .ask-bar button:hover:not(:disabled), .ask-bar button:focus-visible { background: color-mix(in srgb, var(--ink) 7%, transparent); }
