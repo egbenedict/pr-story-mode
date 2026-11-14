@@ -8,4 +8,4 @@ pr-story bench --repo ky    --count 20 --mode commits --min-lines 20 --max-lines
 pr-story bench --repo luau  --count 20 --mode commits --min-lines 20 --max-lines 3000 --provider anthropic
 ```
 
-Model `claude-opus-5-5`, medium effort. Total cost $10.53 (token columns × $4 input, $20 output, $0.20 cache read, $5 cache write per million). Summary in the main README.
+Model `claude-opus-5-5`, medium effort. Total cost $10.53 (token columns × $4 input, $20 output, $0.20 cache read, $5 cache write per million). Summary in [docs/DESIGN.md](../../../docs/DESIGN.md#benchmarks).
