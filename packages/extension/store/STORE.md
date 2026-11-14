@@ -4,7 +4,7 @@ Everything the store's dashboard asks for, ready to paste. Upload `release/pr-st
 
 ## Package tab
 
-- **Zip:** `packages/extension/release/pr-story-mode-1.1.1.zip`
+- **Zip:** `packages/extension/release/pr-story-mode-1.1.2.zip`
 
 ## Store listing tab
 
