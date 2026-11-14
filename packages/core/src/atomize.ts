@@ -276,7 +276,7 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
     const t = child.type;
 
     if (pack.isLeading(t)) return { kind: "leading" };
-    if (pack.isImport(t)) return { kind: "import", path: [...path, "<imports>"], node: child };
+    if (pack.isImport(t) || pack.importNode?.(child)) return { kind: "import", path: [...path, "<imports>"], node: child };
 
     // A key whose entries are units of their own, named under it.
     const nested = pack.nestedKeys?.(child);
@@ -336,7 +336,7 @@ function locate(root: Node, row: number, pack: LanguagePack): Location {
     }
 
     // Any other statement directly inside a container (module, class body) is its own unit.
-    const name = nameOf(child);
+    const name = pack.statementName?.(child) ?? nameOf(child);
     const packName = name === null ? (pack.unitName?.(child) ?? null) : null;
     if (packName) {
       unit = { node: child, start, end: child.endPosition.row + 1, named: true, path: [...path, packName], block: true };

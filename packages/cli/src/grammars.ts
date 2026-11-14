@@ -27,6 +27,9 @@ const GRAMMARS: Record<string, string> = {
   java: "tree-sitter-java/tree-sitter-java.wasm",
   yaml: "@tree-sitter-grammars/tree-sitter-yaml/tree-sitter-yaml.wasm",
   toml: "@tree-sitter-grammars/tree-sitter-toml/tree-sitter-toml.wasm",
+  ruby: "tree-sitter-ruby/tree-sitter-ruby.wasm",
+  csharp: "tree-sitter-c-sharp/tree-sitter-c_sharp.wasm",
+  php: "tree-sitter-php/tree-sitter-php.wasm",
 };
 
 /** Loads grammar .wasm files from the installed tree-sitter-* packages. */
@@ -51,6 +54,9 @@ const QUERIES: Record<string, string[]> = {
   go: ["tree-sitter-go/queries"],
   rust: ["tree-sitter-rust/queries"],
   java: ["tree-sitter-java/queries"],
+  ruby: ["tree-sitter-ruby/queries"],
+  csharp: ["tree-sitter-c-sharp/queries"],
+  php: ["tree-sitter-php/queries"],
 };
 
 /** Loads query files (such as tags.scm) shipped with the tree-sitter-* packages. */

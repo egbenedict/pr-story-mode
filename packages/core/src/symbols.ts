@@ -46,7 +46,7 @@ export function unitSymbols(nodes: Node[], pack: LanguagePack, tags: Query | nul
       const n = stack.pop()!;
       visited++;
       if (pack.isIdentifier(n.type)) {
-        if (isBinding(n)) bound.add(n.text);
+        if (pack.isBinding?.(n) ?? isBinding(n)) bound.add(n.text);
         else if (isObjectKey(n)) used.push({ node: n, text: n.text, key: true });
         else if (!isNameOnly(n)) used.push({ node: n, text: n.text });
         // Look inside `Ns::name` / `crate::name` so the bare name is found too.

@@ -23,6 +23,15 @@ const repoFiles = [
   "crates/x/src/lib.rs",
   "crates/x/src/parser.rs",
   "crates/x/src/ast/mod.rs",
+  "app/models/order.rb",
+  "app/models/money.rb",
+  "lib/shop/cart.rb",
+  "app/Models/User.php",
+  "app/Http/Controllers/UserController.php",
+  "app/helpers.php",
+  "src/Shop.Core/Cart.cs",
+  "src/Shop.Core/Item.cs",
+  "src/Shop.Web/Program.cs",
   "node_modules/left-pad/index.js",
   "README.md",
 ];
@@ -48,6 +57,9 @@ describe("importedPaths", () => {
     ]);
     expect(importedPaths("cmd/server/main.go", `import (\n  "fmt"\n  "example.com/app/internal/store"\n)\n`, files, dirs)).toEqual(["internal/store/store.go"]);
     expect(importedPaths("src/main/java/com/acme/Order.java", "import com.acme.billing.Invoice;\nimport java.util.List;\n", files, dirs)).toEqual(["src/main/java/com/acme/billing/Invoice.java"]);
+    expect(importedPaths("app/models/order.rb", 'require "json"\nrequire "shop/cart"\nrequire_relative "money"\n', files, dirs)).toEqual(["app/models/money.rb", "lib/shop/cart.rb"]);
+    expect(importedPaths("app/Http/Controllers/UserController.php", "<?php\nuse App\\Models\\User;\nuse Illuminate\\Http\\Request;\nrequire_once __DIR__ . '/../../helpers.php';\n", files, dirs)).toEqual(["app/Models/User.php", "app/helpers.php"]);
+    expect(importedPaths("src/Shop.Web/Program.cs", "using System;\nusing Shop.Core;\n", files, dirs)).toEqual(["src/Shop.Core/Cart.cs", "src/Shop.Core/Item.cs"]);
     expect(importedPaths("crates/x/src/lib.rs", "mod parser;\npub mod ast;\nuse std::fmt;\n", files, dirs)).toEqual(["crates/x/src/parser.rs", "crates/x/src/ast/mod.rs"]);
   });
 });

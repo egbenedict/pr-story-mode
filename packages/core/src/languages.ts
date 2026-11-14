@@ -56,6 +56,12 @@ export type LanguagePack = {
   nestedKeys?(node: Node): { list: Node; name: string } | null;
   /** A statement that is always its own atom, never joined with small neighbours (a YAML key holding a block). */
   isBlock?(node: Node): boolean;
+  /** A name for a statement, tried before the generic rules (Ruby `LIMIT = 10`, C# fields, PHP properties). */
+  statementName?(node: Node): string | null;
+  /** A statement that imports, where the node type alone can't tell (Ruby `require "x"`). */
+  importNode?(node: Node): boolean;
+  /** Whether identifier `n` introduces a local name (a parameter), or undefined for the generic rules. */
+  isBinding?(n: Node): boolean | undefined;
 };
 
 const set = (...xs: string[]) => {
@@ -328,6 +334,269 @@ export const JAVA: LanguagePack = {
   },
 };
 
+// ---- Tier 2 on top of the generic patterns: Ruby, C#, PHP ----
+
+/** A string argument as a label: `"adds items"`, shortened past 60 characters. */
+function quoted(text: string): string {
+  const q = text[0] ?? '"';
+  const body = text.slice(1, -1).replace(/\s+/g, " ");
+  return `${q}${body.length > 60 ? body.slice(0, 59).trimEnd() + "…" : body}${q}`;
+}
+
+/** `Shop::Cart` → `Cart`. */
+const rubyLast = (s: string) => s.replace(/^.*::/, "");
+
+/** The class or module a Ruby node sits in (`Cart` for `class Shop::Cart`); `class << self` is skipped. */
+function rubyClass(n: Node): string | null {
+  const c = firstAncestor(n, (t) => t === "class" || t === "module");
+  const name = c?.childForFieldName("name")?.text;
+  return name ? rubyLast(name) : null;
+}
+
+/**
+ * A label for a Ruby call statement, by method and first argument: `it("adds items")`,
+ * `has_many(:posts)`, `include(Enumerable)`, `RSpec.describe(Cart)`, `before`. Null for calls on
+ * other receivers (`expect(x).to …`) and for calls without a plain first argument or a block.
+ */
+function rubyCallLabel(call: Node): string | null {
+  if (call.type !== "call") return null;
+  const method = call.childForFieldName("method");
+  if (method?.type !== "identifier") return null;
+  const recv = call.childForFieldName("receiver");
+  if (recv && recv.type !== "constant" && recv.type !== "scope_resolution") return null;
+  const name = recv ? `${recv.text}.${method.text}` : method.text;
+  const first = call.childForFieldName("arguments")?.namedChildren[0];
+  if (!first) return call.childForFieldName("block") ? name : null;
+  if (first.type === "string") return `${name}(${quoted(first.text)})`;
+  if (/^(simple_symbol|constant|scope_resolution)$/.test(first.type)) return `${name}(${first.text})`;
+  return null;
+}
+
+/** Blocks whose statements are units of their own: RSpec groups, and route and config blocks. */
+const RUBY_GROUPS = new Set(["describe", "context", "feature", "shared_examples", "shared_examples_for", "shared_context", "draw", "namespace", "scope", "configure"]);
+
+/** An RSpec group, or a routes or config block: `describe X do`, `Rails.application.routes.draw do`. */
+function rubyGroup(node: Node): boolean {
+  if (node.type !== "call" || !RUBY_GROUPS.has(node.childForFieldName("method")?.text ?? "")) return false;
+  const recv = node.childForFieldName("receiver");
+  return !recv || /^(RSpec|Rails\.application(\.routes)?)$/.test(recv.text);
+}
+/** Whether the nearest call around `node` is a group, with no class or method in between. */
+function rubyInGroup(node: Node): boolean {
+  for (let p = node.parent; p; p = p.parent) {
+    if (p.type === "call") return rubyGroup(p);
+    if (p.type === "class" || p.type === "module" || /method$/.test(p.type)) return false;
+  }
+  return false;
+}
+
+const RUBY_BASE = genericPack("ruby", "ruby", [".rb", ".rake", ".gemspec", ".ru", "gemfile", "rakefile"]);
+export const RUBY: LanguagePack = {
+  ...RUBY_BASE,
+  tier: 2,
+  isClassLike: set("class", "module", "singleton_class"),
+  isBody: set("body_statement"),
+  isFunctionLike: set("method", "singleton_method"),
+  isWrapper: () => false,
+  isImport: () => false,
+  isLeading: set("comment"),
+  isIdentifier: set("identifier", "constant"),
+  // `class << self` holds class methods.
+  classNameOf: (node) => (node.type === "singleton_class" ? `class << ${node.childForFieldName("value")?.text ?? "self"}` : null),
+  ownerType: rubyLast,
+  importNode(node) {
+    if (node.type !== "call" || node.childForFieldName("receiver")) return false;
+    return /^(require|require_relative|load|autoload)$/.test(node.childForFieldName("method")?.text ?? "");
+  },
+  statementName(node) {
+    // `LIMIT = 10`
+    if ((node.type === "assignment" || node.type === "operator_assignment") && node.childForFieldName("left")?.type === "constant") return node.childForFieldName("left")!.text;
+    if (node.type !== "call") return null;
+    // `private def helper … end` is the method `helper`.
+    const first = node.childForFieldName("arguments")?.namedChildren[0];
+    if (first && (first.type === "method" || first.type === "singleton_method") && !node.childForFieldName("receiver")) return first.childForFieldName("name")?.text ?? null;
+    return rubyCallLabel(node);
+  },
+  // `describe Cart do … end`: each `it`, `let` and `before` inside is its own atom, named under it.
+  // So are the examples in a loop inside a group (`%w[a b].each do |x| it … end`).
+  nestedKeys(node) {
+    const list = node.type === "call" ? node.childForFieldName("block")?.childForFieldName("body") : null;
+    if (!list) return null;
+    if (rubyGroup(node)) return { list, name: rubyCallLabel(node) ?? node.childForFieldName("method")!.text };
+    const method = node.childForFieldName("method")?.text ?? "";
+    const recv = node.childForFieldName("receiver");
+    if (!recv || !/^each(_with_index|_pair)?$/.test(method) || !rubyInGroup(node)) return null;
+    const params = node.childForFieldName("block")?.childForFieldName("parameters")?.text ?? "";
+    return { list, name: recv.text.length <= 30 ? `${recv.text}.${method}` : `${method} ${params}`.trim() };
+  },
+  // A comment line belongs to what follows, even where the tree files it inside the item above.
+  commentLine: (text) => /^\s*#/.test(text),
+  docJoins: () => true,
+  isBinding(n) {
+    const p = n.parent;
+    if (!p || n.type !== "identifier") return undefined;
+    if (/^(method_parameters|block_parameters|lambda_parameters|destructured_parameter|left_assignment_list|exception_variable)$/.test(p.type)) return true;
+    if (/^(optional_parameter|keyword_parameter|splat_parameter|hash_splat_parameter|block_parameter)$/.test(p.type)) return isField(p, "name", n);
+    if (p.type === "for") return isField(p, "pattern", n);
+    return undefined;
+  },
+  refOf(n) {
+    const p = n.parent;
+    // `private` on its own line changes visibility; it names nothing.
+    if (n.type === "identifier" && p?.type === "body_statement" && /^(private|protected|public|module_function)$/.test(n.text)) return null;
+    if (p?.type !== "call" || !isField(p, "method", n)) return undefined;
+    const recv = p.childForFieldName("receiver");
+    // Inside a method, `recalc()` and `self.recalc` call the class's own method; `Cart.build` is Cart's.
+    // Calls in a class body (`has_many :posts`) stay plain.
+    if (!recv || recv.type === "self") {
+      const inMethod = firstAncestor(n, (t) => /^(method|singleton_method|class|module)$/.test(t));
+      const cls = inMethod && /method$/.test(inMethod.type) ? rubyClass(n) : null;
+      return cls ? `${cls}.${n.text}` : undefined;
+    }
+    if (recv.type === "constant" || recv.type === "scope_resolution") return n.text === "new" ? null : `${rubyLast(recv.text)}.${n.text}`;
+    return undefined;
+  },
+};
+
+const CSHARP_CLASS = /^(class|struct|record|record_struct|interface|enum)_declaration$/;
+const csClass = (n: Node) => firstAncestor(n, (t) => CSHARP_CLASS.test(t))?.childForFieldName("name")?.text ?? null;
+
+const CSHARP_BASE = genericPack("csharp", "csharp", [".cs", ".csx"]);
+export const CSHARP: LanguagePack = {
+  ...CSHARP_BASE,
+  tier: 2,
+  isClassLike: (t) => CSHARP_CLASS.test(t) || t === "namespace_declaration",
+  // An `#if` that splits a signature leaves the parser with an error region; its declarations are still units.
+  declList: (node) => (node.type === "ERROR" ? node : null),
+  isBody: set("declaration_list"),
+  isFunctionLike: set("method_declaration", "constructor_declaration", "destructor_declaration", "local_function_statement"),
+  isWrapper: () => false,
+  isImport: set("using_directive", "extern_alias_directive"),
+  isLeading: set("comment"),
+  isIdentifier: set("identifier", "implicit_parameter"),
+  statementName(node) {
+    if (node.type === "file_scoped_namespace_declaration") return `namespace ${node.childForFieldName("name")?.text ?? ""}`.trim();
+    // `private readonly List<Item> _items = new();`
+    if (node.type === "field_declaration" || node.type === "event_field_declaration") {
+      const decl = node.namedChildren.find((c) => c?.type === "variable_declaration")?.namedChildren.find((c) => c?.type === "variable_declarator");
+      return decl?.childForFieldName("name")?.text ?? null;
+    }
+    return null;
+  },
+  docJoins: () => true,
+  isBinding(n) {
+    if (n.type === "implicit_parameter") return true; // `x` in `x => x + 1`
+    const p = n.parent;
+    switch (p?.type) {
+      case "parameter":
+      case "catch_declaration":
+      case "declaration_pattern":
+      case "var_pattern":
+      case "declaration_expression":
+        return isField(p, "name", n);
+      case "foreach_statement":
+        return isField(p, "left", n);
+    }
+    return undefined;
+  },
+  refOf(n) {
+    if (n.type !== "identifier") return undefined;
+    const p = n.parent;
+    // Namespace names in `using` and `namespace` lines aren't uses of a declaration.
+    const named = firstAncestor(n, (t) => t !== "qualified_name");
+    if (named && /^(using_directive|namespace_declaration|file_scoped_namespace_declaration)$/.test(named.type) && (p?.type === "qualified_name" || isField(named, "name", n) || named.type === "using_directive")) return null;
+    // `Recalc()` calls the enclosing class's own method.
+    if (p?.type === "invocation_expression" && isField(p, "function", n)) {
+      const cls = csClass(n);
+      return cls ? `${cls}.${n.text}` : undefined;
+    }
+    if (p?.type !== "member_access_expression" || !isField(p, "name", n)) return undefined;
+    const obj = p.childForFieldName("expression");
+    const g = p.parent;
+    const called = g?.type === "invocation_expression" && isField(g, "function", p);
+    // `this.Recalc()` and `this.Total`: the class's own member; `Helpers.Log()` Helpers'.
+    if (obj?.type === "this") return `${csClass(n) ?? ""}.${n.text}`;
+    if (called && obj?.type === "identifier" && /^[A-Z]/.test(obj.text)) return `${obj.text}.${n.text}`;
+    // Other calls name the method; other reads are member-only, as `a.b` is in other languages.
+    return called ? n.text : `.${n.text}`;
+  },
+};
+
+const PHP_CLASS = /^(class|interface|trait|enum)_declaration$/;
+const phpClass = (n: Node) => firstAncestor(n, (t) => PHP_CLASS.test(t))?.childForFieldName("name")?.text ?? null;
+/** `Helpers`, `\App\Support\Helpers` → `Helpers`. */
+const phpLast = (s: string) => s.replace(/^.*\\/, "");
+
+/** `Foo::m()` and `self::LIMIT`: `Foo.m`, or the enclosing class's own member for self and static. */
+function phpScoped(scope: Node | null | undefined, n: Node): string | null | undefined {
+  if (!scope) return undefined;
+  if (scope.type === "relative_scope") return scope.text === "parent" ? n.text : `${phpClass(n) ?? ""}.${n.text}`;
+  const last = phpLast(scope.text);
+  return /^\w+$/.test(last) ? `${last}.${n.text}` : n.text;
+}
+
+/** A label for a call statement with a string first argument: `Route::get('/cart')`, `it('adds items')`. */
+function phpCallLabel(node: Node): string | null {
+  if (node.type !== "expression_statement") return null;
+  const call = node.namedChildren[0];
+  let fn: string | null = null;
+  if (call?.type === "function_call_expression") fn = call.childForFieldName("function")?.text ?? null;
+  else if (call?.type === "scoped_call_expression") fn = `${call.childForFieldName("scope")?.text ?? ""}::${call.childForFieldName("name")?.text ?? ""}`;
+  const first = call?.childForFieldName("arguments")?.namedChildren[0]?.namedChildren[0];
+  if (!fn || fn.length > 40 || !first || !/^(string|encapsed_string)$/.test(first.type)) return null;
+  return `${fn}(${quoted(first.text)})`;
+}
+
+const PHP_BASE = genericPack("php", "php", [".php"]);
+export const PHP: LanguagePack = {
+  ...PHP_BASE,
+  tier: 2,
+  isClassLike: (t) => PHP_CLASS.test(t) || t === "namespace_definition",
+  isBody: set("declaration_list", "enum_declaration_list", "compound_statement"),
+  isFunctionLike: set("method_declaration", "function_definition"),
+  isWrapper: () => false,
+  isImport: set("namespace_use_declaration"),
+  // The opening `<?php` belongs with what follows it.
+  isLeading: set("comment", "php_tag"),
+  isIdentifier: set("name"),
+  // `namespace App\Models;` names a line, like Java's `package`; a braced namespace holds its declarations.
+  classNameOf: (node) => (node.type === "namespace_definition" && !node.childForFieldName("body") ? `namespace ${node.childForFieldName("name")?.text ?? ""}`.trim() : null),
+  importNode: (node) => node.type === "expression_statement" && /^(require|require_once|include|include_once)_expression$/.test(node.namedChildren[0]?.type ?? ""),
+  statementName(node) {
+    // `const LIMIT = 10;` and `private array $items = [];` (named without the `$`)
+    if (node.type === "const_declaration") return node.namedChildren.find((c) => c?.type === "const_element")?.namedChildren.find((c) => c?.type === "name")?.text ?? null;
+    if (node.type === "property_declaration") return node.namedChildren.find((c) => c?.type === "property_element")?.childForFieldName("name")?.namedChildren.find((c) => c?.type === "name")?.text ?? null;
+    return phpCallLabel(node);
+  },
+  docJoins: () => true,
+  refOf(n) {
+    if (n.type !== "name") return undefined;
+    const p = n.parent;
+    if (!p) return undefined;
+    // `$item` is a variable, `App` in `App\Models\User` a namespace: neither names a declaration.
+    if (p.type === "variable_name" || p.type === "namespace_name") return null;
+    switch (p.type) {
+      case "member_call_expression":
+      case "nullsafe_member_call_expression":
+      case "member_access_expression":
+      case "nullsafe_member_access_expression": {
+        if (!isField(p, "name", n)) return undefined;
+        // `$this->recalc()` and `$this->items`: the class's own member.
+        if (p.childForFieldName("object")?.text === "$this") return `${phpClass(n) ?? ""}.${n.text}`;
+        return /call/.test(p.type) ? n.text : `.${n.text}`;
+      }
+      case "scoped_call_expression":
+        return isField(p, "name", n) ? phpScoped(p.childForFieldName("scope"), n) : undefined;
+      case "class_constant_access_expression": {
+        const kids = p.namedChildren;
+        if (kids.length < 2 || kids[kids.length - 1]?.id !== n.id) return undefined; // the class itself
+        return n.text === "class" ? null : phpScoped(kids[0], n);
+      }
+    }
+    return undefined;
+  },
+};
+
 /** JSON: one atom per changed top-level key. */
 export const JSON_PACK: LanguagePack = {
   id: "json",
@@ -428,7 +697,7 @@ export const TOML_PACK: LanguagePack = {
   commentLine: (text) => /^\s*#/.test(text),
 };
 
-export const LANGUAGE_PACKS: LanguagePack[] = [TYPESCRIPT, TSX, JAVASCRIPT, PYTHON, C, CPP, GO, RUST, JAVA, JSON_PACK, YAML_PACK, TOML_PACK];
+export const LANGUAGE_PACKS: LanguagePack[] = [TYPESCRIPT, TSX, JAVASCRIPT, PYTHON, C, CPP, GO, RUST, JAVA, RUBY, CSHARP, PHP, JSON_PACK, YAML_PACK, TOML_PACK];
 
 /** Lockfiles and generated files never need a grammar: they go straight to the mechanical list. */
 const LOCKFILES = new Set([
@@ -473,6 +742,7 @@ export function isGeneratedText(text: string | undefined): boolean {
 
 export function packForPath(path: string): LanguagePack | null {
   const lower = path.toLowerCase();
+  if (lower.endsWith(".blade.php")) return null; // Blade templates are HTML to the PHP grammar
   for (const p of LANGUAGE_PACKS) {
     if (p.extensions.some((e) => lower.endsWith(e))) return p;
   }

@@ -121,6 +121,44 @@ export function importedPaths(path: string, text: string, files: Set<string>, di
       while (parts.length > 1 && /^[a-z]/.test(parts[parts.length - 1]) && /^[A-Z]/.test(parts[parts.length - 2] ?? "")) parts.pop();
       add(bySuffix(`${parts.join("/")}.java`)[0]);
     }
+  } else if (pack.id === "ruby") {
+    // `require_relative "money"` is beside this file; `require "shop/cart"` is under a load path such as lib/.
+    for (const m of text.matchAll(/^\s*require_relative\s*\(?\s*["']([^"']+)["']/gm)) {
+      const base = join(dir, m[1]);
+      add(base);
+      if (base) add(`${base}.rb`);
+    }
+    for (const m of text.matchAll(/^\s*require\s*\(?\s*["']([^"']+)["']/gm)) {
+      const rel = m[1].endsWith(".rb") ? m[1] : `${m[1]}.rb`;
+      add(bySuffix(`lib/${rel}`)[0] ?? bySuffix(rel)[0]);
+    }
+  } else if (pack.id === "php") {
+    // `use App\Models\User;` is usually app/Models/User.php (PSR-4): match the longest path tail.
+    for (const m of text.matchAll(/^\s*use\s+(?:function\s+|const\s+)?\\?([\w\\]+)(?:\s+as\s+\w+)?\s*;/gm)) {
+      const parts = m[1].split("\\");
+      for (let k = parts.length - 1; k >= Math.min(2, parts.length - 1) && k >= 1; k--) {
+        const hit = bySuffix(`${parts.slice(-k).join("/")}.php`)[0];
+        if (hit) {
+          add(hit);
+          break;
+        }
+      }
+    }
+    for (const m of text.matchAll(/\b(?:require|include)(?:_once)?\s*\(?\s*(?:__DIR__\s*\.\s*)?["']\/?([^"']+\.php)["']/g)) add(join(dir, m[1]) ?? undefined);
+  } else if (pack.id === "csharp") {
+    // `using Shop.Core;`: files in the directory whose path ends with the namespace (Shop/Core, or Core).
+    for (const m of text.matchAll(/^\s*(?:global\s+)?using\s+(?:static\s+)?([\w.]+)\s*;/gm)) {
+      const parts = m[1].split(".");
+      if (/^(System|Microsoft|Windows)$/.test(parts[0])) continue;
+      for (let k = parts.length; k >= 1; k--) {
+        const suffix = parts.slice(-k).join("/");
+        const hit = [...dirs.keys()].filter((d) => d === suffix || d.endsWith(`/${suffix}`) || d === parts.slice(0, k).join(".") || d.endsWith(`/${parts.slice(0, k).join(".")}`)).sort((a, b) => a.length - b.length)[0];
+        if (hit !== undefined) {
+          for (const f of (dirs.get(hit) ?? []).filter((f) => f.endsWith(".cs")).slice(0, 4)) add(f);
+          break;
+        }
+      }
+    }
   } else if (pack.id === "rust") {
     const modDir = /^(mod|lib|main)\.rs$/.test(baseName(path)) ? dir : join(dir, stem(path)) ?? dir;
     for (const m of text.matchAll(/^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;/gm)) {

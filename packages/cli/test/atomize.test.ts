@@ -559,3 +559,200 @@ jobs:
     expectFullCoverage(pr, atoms);
   });
 });
+
+describe("Ruby atoms", () => {
+  const base = `require "json"
+
+module Shop
+  class Cart < Base
+    include Enumerable
+    LIMIT = 10
+
+    # Adds an item.
+    def add(item)
+      @items << item
+      self.recalc
+    end
+
+    def self.build(items)
+      new(items)
+    end
+
+    private
+
+    def recalc
+      @total = @items.sum(&:price)
+    end
+  end
+
+  class Other
+    def recalc; end
+  end
+end
+`;
+  const spec = `RSpec.describe Shop::Cart do
+  let(:cart) { Shop::Cart.build([]) }
+
+  it "adds items" do
+    expect(cart.add(1)).to be
+  end
+
+  context "when empty" do
+    it "has no total" do
+      expect(cart.total).to be_nil
+    end
+  end
+end
+`;
+
+  it("names methods by class and module, and links self calls to the class's own method", async () => {
+    const head = base.replace("@items.sum(&:price)", "@items.sum(&:cost)").replace("      self.recalc\n", "      self.recalc\n      recalc()\n").replace("def recalc; end", "def recalc; nil; end");
+    const pr = makePR({ "cart.rb": base }, { "cart.rb": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["cart.rb:Shop.Cart.add", "cart.rb:Shop.Cart.recalc", "cart.rb:Shop.Other.recalc"]);
+    const edges = edgeNames(atoms);
+    expect(edges).toContain("Shop.Cart.recalc → Shop.Cart.add");
+    expect(edges).not.toContain("Shop.Other.recalc → Shop.Cart.add");
+    expect(atoms[0].references).not.toContain("item"); // a parameter
+    expect(atoms.every((a) => a.supportTier === 2)).toBe(true);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("joins a comment to the method below, groups requires, and names class-body lines", async () => {
+    const head = base
+      .replace('require "json"\n', 'require "json"\nrequire_relative "money"\n')
+      .replace("# Adds an item.", "# Adds an item to the cart.")
+      .replace("include Enumerable\n    LIMIT = 10", "include Enumerable, Comparable\n    LIMIT = 20");
+    const pr = makePR({ "cart.rb": base }, { "cart.rb": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["cart.rb:<imports>", "cart.rb:Shop.Cart.include(Enumerable), LIMIT", "cart.rb:Shop.Cart.add"]);
+    expect(atoms[1].defines).toContain("Cart.LIMIT");
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("splits RSpec groups into their examples, and links examples to the code they call", async () => {
+    const head = spec.replace("cart.add(1)", "cart.add(2)").replace("to be_nil", "to eq(0)");
+    const pr = makePR({ "cart.rb": base, "spec/cart_spec.rb": spec }, { "cart.rb": base.replace("@items << item", "@items.push(item)"), "spec/cart_spec.rb": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual([
+      "cart.rb:Shop.Cart.add",
+      'spec/cart_spec.rb:RSpec.describe(Shop::Cart).it("adds items")',
+      'spec/cart_spec.rb:RSpec.describe(Shop::Cart).context("when empty").it("has no total")',
+    ]);
+    expect(edgeNames(atoms)).toContain('Shop.Cart.add → RSpec.describe(Shop::Cart).it("adds items")');
+    expectFullCoverage(pr, atoms);
+  });
+});
+
+describe("C# atoms", () => {
+  const base = `using System;
+
+namespace Shop.Core
+{
+    public class Cart
+    {
+        private readonly List<Item> _items = new();
+        public int Total { get; private set; }
+
+        /// <summary>Adds an item.</summary>
+        public void Add(Item item)
+        {
+            _items.Add(item);
+            Recalc();
+        }
+
+        private void Recalc() => Total = _items.Count;
+    }
+
+    public class Other
+    {
+        private void Recalc() { }
+    }
+}
+`;
+
+  it("names members by class, and links unqualified and this. calls to the class's own method", async () => {
+    const head = base.replace("            Recalc();\n", "            Recalc();\n            this.Recalc();\n").replace("Total = _items.Count;", "Total = _items.Count + 1;").replace("private void Recalc() { }", "private void Recalc() { return; }");
+    const pr = makePR({ "Cart.cs": base }, { "Cart.cs": head });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["Cart.cs:Shop.Core.Cart.Add", "Cart.cs:Shop.Core.Cart.Recalc", "Cart.cs:Shop.Core.Other.Recalc"]);
+    const edges = edgeNames(atoms);
+    expect(edges).toContain("Shop.Core.Cart.Recalc → Shop.Core.Cart.Add");
+    expect(edges).not.toContain("Shop.Core.Other.Recalc → Shop.Core.Cart.Add");
+    expect(atoms[0].references).not.toContain("item");
+    expect(atoms.every((a) => a.supportTier === 2)).toBe(true);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("names fields, joins a doc comment to its method, and names file-scoped namespace lines", async () => {
+    const head = base.replace("_items = new();", "_items = new(16);").replace("Adds an item.", "Adds one item.");
+    const other = "namespace Shop.Core;\n\npublic static class Helpers\n{\n    public static void Log(string s) { }\n}\n";
+    const pr = makePR({ "Cart.cs": base }, { "Cart.cs": head, "Helpers.cs": other });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["Cart.cs:Shop.Core.Cart._items", "Cart.cs:Shop.Core.Cart.Add", "Helpers.cs:namespace Shop.Core", "Helpers.cs:Helpers", "Helpers.cs:Helpers.Log"]);
+    expect(atoms[0].defines).toContain("Cart._items");
+    expect(atoms[2].defines).toEqual([]);
+    expect(atoms[2].references).toEqual([]);
+    expectFullCoverage(pr, atoms);
+  });
+});
+
+describe("PHP atoms", () => {
+  const base = `<?php
+
+namespace App\\Models;
+
+use App\\Support\\Helpers;
+
+class Cart
+{
+    public const LIMIT = 10;
+    private array $items = [];
+
+    /**
+     * Adds an item.
+     */
+    public function add(Item $item): void
+    {
+        $this->items[] = $item;
+        $this->recalc();
+    }
+
+    private function recalc(): void {}
+}
+
+class Other
+{
+    private function recalc(): void {}
+}
+`;
+  const helpers = "<?php\n\nnamespace App\\Support;\n\nclass Helpers\n{\n    public static function format($x) { return $x; }\n}\n";
+
+  it("links $this-> and self:: calls to the class's own members, and Class:: calls to that class", async () => {
+    const head = base
+      .replace("        $this->recalc();\n", "        $this->recalc();\n        self::recalc();\n        Helpers::format($item);\n")
+      .replace("private function recalc(): void {}\n}\n\nclass Other", "private function recalc(): void { $this->items = []; }\n}\n\nclass Other")
+      .replace("class Other\n{\n    private function recalc(): void {}", "class Other\n{\n    private function recalc(): void { return; }");
+    const pr = makePR({ "Cart.php": base, "Helpers.php": helpers }, { "Cart.php": head, "Helpers.php": helpers.replace("return $x;", "return trim($x);") });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["Cart.php:Cart.add", "Cart.php:Cart.recalc", "Cart.php:Other.recalc", "Helpers.php:Helpers.format"]);
+    const edges = edgeNames(atoms);
+    expect(edges).toContain("Cart.recalc → Cart.add");
+    expect(edges).toContain("Helpers.format → Cart.add");
+    expect(edges).not.toContain("Other.recalc → Cart.add");
+    expect(atoms[0].references).not.toContain("item"); // a variable
+    expect(atoms.every((a) => a.supportTier === 2)).toBe(true);
+    expectFullCoverage(pr, atoms);
+  });
+
+  it("names constants, properties, namespace lines and test calls, and joins a docblock to its method", async () => {
+    const head = base.replace("LIMIT = 10", "LIMIT = 20").replace("$items = []", "$items = [1]").replace("* Adds an item.", "* Adds one item.");
+    const test = "<?php\n\nit('adds items', function () {\n    expect(true)->toBeTrue();\n});\n";
+    const pr = makePR({ "Cart.php": base }, { "Cart.php": head, "Helpers.php": helpers, "tests/CartTest.php": test, "views/cart.blade.php": "<div>{{ $cart }}</div>\n" });
+    const atoms = await atomsOf(pr);
+    expect(paths(atoms)).toEqual(["Cart.php:Cart.LIMIT, items", "Cart.php:Cart.add", "Helpers.php:namespace App\\Support", "Helpers.php:Helpers", "Helpers.php:Helpers.format", "tests/CartTest.php:it('adds items')", "views/cart.blade.php:"]);
+    expect(atoms[0].defines).toEqual(expect.arrayContaining(["LIMIT", "items", "Cart.items"]));
+    expect(atoms.find((a) => a.file.endsWith(".blade.php"))!.supportTier).toBe(0);
+    expectFullCoverage(pr, atoms);
+  });
+});

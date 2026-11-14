@@ -370,7 +370,7 @@ function walk(node: Node, path: string[], pack: LanguagePack, out: Unit[], file:
     }
     docStart = lead !== null && leadEnd >= child.startPosition.row - 1 ? lead + 1 : undefined;
     lead = null;
-    if (pack.isImport(t)) continue;
+    if (pack.isImport(t) || pack.importNode?.(child)) continue;
     if (pack.isWrapper(t)) {
       const before = out.length;
       const outerDoc = docStart;
@@ -399,7 +399,7 @@ function walk(node: Node, path: string[], pack: LanguagePack, out: Unit[], file:
       }
       continue;
     }
-    const name = nameOf(child);
+    const name = pack.statementName?.(child) ?? nameOf(child);
     if (!name) continue;
     push(child, name, pack.isFunctionLike(t) ? "function" : "statement");
   }

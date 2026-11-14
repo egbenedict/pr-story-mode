@@ -245,7 +245,7 @@ Each step can show code the PR didn't change, collapsed above the step and label
 - **Steps that change only comments** get no context. Comment lines are found per file, including doc blocks written without a leading `*`.
 - **Test steps** skip helpers from outside the PR and callers that are other tests.
 - Definitions keep the doc comment above them. A slice of a long function or table keeps its opening line, and the lines that mention the symbol are highlighted.
-- **Sources:** the PR's own files, then the rest of the repository, through `git grep` on a local clone or, without one, the GitHub source: one API request lists the repository, likely files are ranked (what the changed files import or include in TS/JS, Python, C/C++, Go, Java and Rust, then nearby directories), and up to 80 files or 3 MB are read while the model orders the steps, plus files named after a symbol that wasn't found. On luau#2579 this finds the same callers as `git grep`.
+- **Sources:** the PR's own files, then the rest of the repository, through `git grep` on a local clone or, without one, the GitHub source: one API request lists the repository, likely files are ranked (what the changed files import or include in TS/JS, Python, C/C++, Go, Java, Rust, Ruby, PHP and C#, then nearby directories), and up to 80 files or 3 MB are read while the model orders the steps, plus files named after a symbol that wasn't found. On luau#2579 this finds the same callers as `git grep`.
 - **Avoiding false matches:** a definition in another file needs a matching import in TS, JS and Python; names with more than 3 definitions are skipped; one-line class members are skipped; a C prototype of the changed function isn't a caller; test files never supply context for non-test code.
 </details>
 
@@ -278,18 +278,21 @@ The `hunkLines` of all atoms in the steps and the mechanical list must equal the
 | Tier | Languages | Atoms |
 |---|---|---|
 | 2 | TypeScript, TSX, JavaScript, Python | Hand-tuned boundaries: classes, methods, fields, top-level statements, `test("…")` calls |
-| 2 | Go, Rust, Java | Generic node patterns plus each language's own rules (below). A changed doc comment joins the declaration it documents |
+| 2 | Go, Rust, Java, Ruby, C#, PHP | Generic node patterns plus each language's own rules (below). A changed doc comment joins the declaration it documents |
 | 1 | C, C++, JSON, YAML, TOML | Generic node patterns. C/C++ also reads names through declarators and flag macros, and looks through `#if` regions and templates. JSON gets one atom per top-level key, YAML and TOML as below |
 | 0 | Everything else | One atom per hunk |
 
 - **Go:** methods are named by their receiver (`func (c *Client) Send` is `Client.Send`), so same-named methods on different types stay apart. `c.flush()` inside a method on `Client` links only to `Client.flush`. `api.Limit` links to `Limit` when `api` is an imported package. Each entry of a grouped `const ( … )`, `var ( … )` or `type ( … )` is its own atom.
 - **Rust:** `impl` blocks are named by their type, without generics (`impl<T> Sp<T>` is `Sp`). Each trait impl stays apart (`From<io::Error> for Error`). `Thing::new()` links only to `Thing`'s own `new`, and `self.m()` to the impl's type. Signature lines right below a `///` doc comment belong to their function. Module docs (`//!`) stay on their own.
 - **Java:** `helper()` and `this.helper()` link to the enclosing class's own method, `Util.helper()` to `Util`'s. Methods after an enum's constants are members of the enum.
+- **Ruby:** methods are named by class and module (`Shop.Cart.add`), and methods in `class << self` under it. Inside a method, `recalc()` and `self.recalc` link only to the class's own `recalc`, and `Cart.build` to `Cart`'s. RSpec groups split into their examples, named by group (`describe(Cart).context("when empty").it("has no total")`), including examples written in a loop inside a group. Class-body lines are named by call (`has_many(:posts)`, `include(Enumerable)`) and constants by name. `require` lines are imports. A comment line joins the code below it.
+- **C#:** members are named by class and namespace. `Recalc()` and `this.Recalc()` link to the enclosing class's own method, `Helpers.Log()` to `Helpers`'. Fields are named by their variable, and a file-scoped `namespace X;` line is its own atom, like Java's `package`. When an `#if` splits a signature, which the grammar can't parse, the declarations around it still get their names.
+- **PHP:** `$this->recalc()`, `self::log()` and `static::` link to the class's own members, `Helpers::format()` to `Helpers`'. Variables never link to anything. Constants and properties are named (`LIMIT`, `items`), as are calls such as `Route::get('/cart')` and Pest's `it('adds items')`. A `namespace` line is its own atom, and the opening `<?php` joins what follows. Blade templates (`.blade.php`) stay at tier 0.
 - **YAML:** one atom per top-level key, and per key under it when it holds keys (`jobs.build`, `on.push`, `spec.replicas`). The same key in two `---` documents stays apart, named by `kind` and `metadata.name` where there are any (`Deployment web.spec.replicas`). A comment line joins the key below it.
 - **TOML:** one atom per table (`[package]`, `[tool.ruff.lint]`, `[[bin]]`) or top-level key. A comment line joins the table below it.
 - YAML and TOML keys name their atoms but don't link to code of the same name, and config files are never read as context. Lockfiles (`pnpm-lock.yaml`, `Cargo.lock`) stay folded with the mechanical changes.
 
-A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `packages/cli/src/grammars.ts`. A pack's optional rules (receiver owners, grouped declarations, doc comments, references) apply only to that language.
+A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `packages/cli/src/grammars.ts`. A pack's optional rules (receiver owners, grouped declarations, doc comments, references, statement names, bindings) apply only to that language.
 
 ## Development
 
@@ -305,7 +308,7 @@ A new language is a `LanguagePack` in `languages.ts` plus a grammar entry in `pa
 ### Commands
 
 ```bash
-npm test                  # 174 tests
+npm test                  # 181 tests
 npm run typecheck
 npm run build             # extension and CLI
 npm run build:extension   # packages/extension/dist
@@ -315,7 +318,7 @@ npm run build:cli         # packages/cli/dist
 <details>
 <summary>What the tests cover</summary>
 
-Diff parsing, GitHub ingest, rate-limit errors and review comments, comment formatting, GitHub Enterprise hosts and tokens, model failures, reuse after a push, streaming steps and plan drafts, reading half-written JSON, context from a listed repository and import resolution, atomization (TS, Python, C++, Go, Rust, Java, JSON, YAML, TOML), classification, re-indent folding, beats, validation, the repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings, appearance, CLI config and key sources, gateway keys that expire, asking about selected code (definitions, citations, carrying answers over a push), and folding data runs, repeated edits and deleted files.
+Diff parsing, GitHub ingest, rate-limit errors and review comments, comment formatting, GitHub Enterprise hosts and tokens, model failures, reuse after a push, streaming steps and plan drafts, reading half-written JSON, context from a listed repository and import resolution, atomization (TS, Python, C++, Go, Rust, Java, Ruby, C#, PHP, JSON, YAML, TOML), classification, re-indent folding, beats, validation, the repair loop, grounding, context retrieval, staged ordering, linked issues, PR page detection, settings, appearance, CLI config and key sources, gateway keys that expire, asking about selected code (definitions, citations, carrying answers over a push), and folding data runs, repeated edits and deleted files.
 </details>
 
 ### Working on the reader

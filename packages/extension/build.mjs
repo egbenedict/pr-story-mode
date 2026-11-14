@@ -26,8 +26,11 @@ const GRAMMARS = {
   java: "tree-sitter-java/tree-sitter-java.wasm",
   yaml: "@tree-sitter-grammars/tree-sitter-yaml/tree-sitter-yaml.wasm",
   toml: "@tree-sitter-grammars/tree-sitter-toml/tree-sitter-toml.wasm",
+  ruby: "tree-sitter-ruby/tree-sitter-ruby.wasm",
+  csharp: "tree-sitter-c-sharp/tree-sitter-c_sharp.wasm",
+  php: "tree-sitter-php/tree-sitter-php.wasm",
 };
-const QUERY_PACKAGES = ["javascript", "typescript", "python", "c", "cpp", "go", "rust", "java"];
+const QUERY_PACKAGES = ["javascript", "typescript", "python", "c", "cpp", "go", "rust", "java", "ruby", "c-sharp", "php"];
 
 function copyStatic() {
   mkdirSync(join(out, "grammars"), { recursive: true });
