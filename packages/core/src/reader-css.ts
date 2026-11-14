@@ -135,8 +135,14 @@ header h1 { font-size: 26px; line-height: 1.25; margin: 0 0 6px; }
 .diff.ctx tr.hl td.code { background: var(--mark-bg); color: var(--ink); }
 .diff.ctx tr.ctx-open td.code { color: var(--ink); }
 .cite.ctx { border-style: dashed; }
-.mechanical { margin: 48px 0 0 50px; border-top: 1px solid var(--line); padding-top: 16px; }
-.mechanical summary { cursor: pointer; font-weight: 600; }
+/* Mechanical changes: reviewable like a step, but unnumbered. */
+.mech-step .step-marker { border-style: dashed; }
+.mech-step .step-marker svg { width: 14px; height: 14px; }
+.rail li a .n svg { width: 12px; height: 12px; vertical-align: -1px; }
+.mech-title { font-weight: 600; margin: 3px 0 4px; }
+.mech-note { margin: 0 0 10px; }
+.mech-list > summary { cursor: pointer; color: var(--muted); font-size: 13.5px; width: fit-content; }
+.mech-list > summary:hover { color: var(--ink); }
 .tag { display: inline-block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-top: 14px; }
 .muted { color: var(--muted); font-weight: 400; }
 footer { margin: 48px 0 0 50px; font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 14px; }
@@ -145,6 +151,6 @@ footer { margin: 48px 0 0 50px; font-size: 12.5px; color: var(--muted); border-t
   .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 16px; }
   main { padding: 20px 16px 60px; }
   .step { grid-template-columns: 1fr; gap: 6px; }
-  .mechanical, footer { margin-left: 0; }
+  footer { margin-left: 0; }
 }
 `;

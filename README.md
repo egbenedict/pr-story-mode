@@ -88,6 +88,7 @@ The extension's reader opens over the pull request page and runs the whole pipel
 - **Streaming:** a loading card shows each stage as it finishes (steps planned, context found, first step written). Then each step appears as soon as it's written, and the one being written streams in.
 - **Top bar:** which step is being written, the time, and tokens and estimated cost. Once written, the cost stays, including questions asked about the code.
 - **Per step:** a reviewed checkbox in the outline and a **Mark step reviewed** button at the end of the step, a **Raw diff** toggle (code only, as GitHub shows it), and citations that highlight the lines they mention.
+- **Mechanical changes** come after the steps in a section marked with a wrench instead of a number: a note on what they are, the items folded under **Show**, and its own reviewed checkbox and button, counted in the progress.
 - **Line links:** words in an explanation link to the lines they describe. Clicking one scrolls to those lines and highlights them; a dashed underline means the lines are unchanged code.
 - **Expanding code:** buttons above, below and inside each chunk show surrounding lines as GitHub does. Lines changed in other steps are dimmed.
 - **Folding:** re-indented code, long runs of data, repeated edits and deleted files fold behind a one-line summary ([details](#display)).
@@ -208,7 +209,7 @@ All of it lives in `packages/core/src`, which runs unchanged in the CLI and the 
 
 - Each changed line maps to its smallest enclosing syntactic unit. A hunk spanning two functions becomes two atoms; several hunks in one function become one.
 - Comments and decorators attach to the code they precede. A deleted file is one atom.
-- Formatting-only edits, pure renames, import reshuffles, lockfiles and generated files are tagged **mechanical** and listed at the end.
+- Formatting-only edits, pure renames, import reshuffles, lockfiles and generated files are tagged **mechanical** and shown after the steps, in a section that's marked reviewed like a step.
 - A rename must be consistent across the PR and introduce a new name, so swapped arguments are never hidden as "mechanical". Code removed in one place and added verbatim elsewhere is tagged **moved**.
 
 ### Symbol graph

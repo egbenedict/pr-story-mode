@@ -255,12 +255,21 @@ export function renderStoryHtml(pr: PRInput, result: PipelineResult, opts: Rende
 
   const mechAtoms = story.mechanical.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
   const mechLines = mechAtoms.reduce((n, a) => n + a.hunkLines.length, 0);
+  // Reviewed like a step, but marked with a wrench instead of a number, with the items folded away.
+  const wrench = `<svg class="icon" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false"><path d="M11.6 2.5A3.2 3.2 0 0 0 7.65 6.95L3.4 11.2a1 1 0 0 0 1.4 1.4L9.05 8.35A3.2 3.2 0 0 0 13.5 4.4L11.2 4.8z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   const mechanical = mechAtoms.length
-    ? `<details class="mechanical" id="mechanical">
-  <summary>Mechanical changes <span class="muted">· ${mechAtoms.length} item${mechAtoms.length === 1 ? "" : "s"}, ${mechLines} line${mechLines === 1 ? "" : "s"}</span></summary>
-  <p class="muted">Formatting, renames, import reshuffles, lockfiles and generated files. Every line is here so nothing in the PR goes unseen.</p>
-  ${mechAtoms.map((a) => `<div class="mech-item"><span class="tag">${a.mechanical}</span>${atomBlock(a)}</div>`).join("")}
-</details>`
+    ? `<section class="step mech-step" id="mechanical" data-step="mechanical">
+  <div class="step-marker" aria-hidden="true">${wrench}</div>
+  <div class="step-body">
+    <p class="mech-title">Mechanical changes</p>
+    <p class="muted mech-note">Formatting, renames, import reshuffles, lockfiles and generated files. Every line is here so nothing in the PR goes unseen.</p>
+    <details class="mech-list">
+      <summary>Show ${mechAtoms.length} item${mechAtoms.length === 1 ? "" : "s"}, ${mechLines} line${mechLines === 1 ? "" : "s"}</summary>
+      ${mechAtoms.map((a) => `<div class="mech-item"><span class="tag">${a.mechanical}</span>${atomBlock(a)}</div>`).join("")}
+    </details>
+    <div class="step-foot"><button class="step-done" type="button" aria-pressed="false" data-step="mechanical"><span class="tick" aria-hidden="true"></span><span class="label">Mark mechanical changes reviewed</span></button></div>
+  </div>
+</section>`
     : "";
 
   const outline = story.steps
@@ -289,7 +298,7 @@ ${READER_CSS}
   <h2>Outline</h2>
   <div class="progress"><div></div></div>
   <div class="progress-text"></div>
-  <ol>${outline}${mechAtoms.length ? `<li><span class="rail-spacer"></span><a href="#mechanical"><span class="n">·</span>Mechanical changes</a></li>` : ""}</ol>
+  <ol>${outline}${mechAtoms.length ? `<li><input type="checkbox" data-step="mechanical" aria-label="Mark mechanical changes reviewed"><a href="#mechanical" data-step="mechanical"><span class="n">${wrench}</span><span>Mechanical changes</span></a></li>` : ""}</ol>
 </nav>
 <main>
 <header>
@@ -318,17 +327,18 @@ ${mechanical}
       const s = b.dataset.step, on = !!done[s];
       b.checked = on; if (on) n++;
       b.closest('li').classList.toggle('done', on);
-      document.getElementById('step-' + s)?.classList.toggle('done', on);
+      document.getElementById(s === 'mechanical' ? 'mechanical' : 'step-' + s)?.classList.toggle('done', on);
       const btn = document.querySelector('.step-done[data-step="' + s + '"]');
       if (btn) {
         btn.setAttribute('aria-pressed', on);
         btn.querySelector('.tick').textContent = on ? '✓' : '';
-        btn.querySelector('.label').textContent = (on ? 'Step ' : 'Mark step ') + s + ' reviewed';
+        const name = s === 'mechanical' ? 'mechanical changes' : 'step ' + s;
+        btn.querySelector('.label').textContent = on ? name[0].toUpperCase() + name.slice(1) + ' reviewed' : 'Mark ' + name + ' reviewed';
         btn.title = on ? 'Click to mark it not reviewed' : '';
       }
     }
     document.querySelector('.progress > div').style.width = total ? (100 * n / total) + '%' : '0';
-    document.querySelector('.progress-text').textContent = n + ' of ' + total + ' steps reviewed';
+    document.querySelector('.progress-text').textContent = n + ' of ' + total + (document.getElementById('mechanical') ? '' : ' steps') + ' reviewed';
   };
   const setDone = (s, on) => {
     done[s] = on;
@@ -386,13 +396,21 @@ ${mechanical}
   });
 
   const links = new Map([...document.querySelectorAll('.rail a[data-step]')].map((a) => [a.dataset.step, a]));
+  const mark = (step) => {
+    links.forEach((a) => a.classList.remove('current'));
+    links.get(step)?.classList.add('current');
+  };
   const io = new IntersectionObserver((entries) => {
-    for (const en of entries) if (en.isIntersecting) {
-      links.forEach((a) => a.classList.remove('current'));
-      links.get(en.target.dataset.step)?.classList.add('current');
-    }
+    for (const en of entries) if (en.isIntersecting) mark(en.target.dataset.step);
   }, { rootMargin: '-20% 0px -70% 0px' });
-  document.querySelectorAll('.step').forEach((s) => io.observe(s));
+  const sections = [...document.querySelectorAll('.step')];
+  sections.forEach((s) => io.observe(s));
+  // The last section can't scroll up to the line that marks a section current: mark it at the bottom.
+  // The story scrolls inside <main>, or the window when the layout stacks on a narrow screen.
+  document.addEventListener('scroll', (e) => {
+    const el = e.target instanceof HTMLElement ? e.target : document.documentElement;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 2) mark(sections[sections.length - 1]?.dataset.step);
+  }, { capture: true, passive: true });
 })();
 </script>
 </body>

@@ -23,6 +23,7 @@ import {
 } from "@prstory/core";
 import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AskProvider, AskRows, AskTip, type AskOptions } from "./ask";
+import { Icon } from "./icons";
 import { CommentButton, LineComments, useComments } from "./comments";
 
 /** What the reader shows; `steps[i]` is undefined until step i has been written. */
@@ -577,16 +578,44 @@ function ContextBlock({ c, step, index }: { c: ContextSnippet; step: number; ind
 }
 
 /** The button at the end of a step: the same as ticking the step in the outline. */
-function DoneButton({ n, done, onDone }: { n: number; done: boolean; onDone: (on: boolean) => void }) {
+function DoneButton({ name, done, onDone }: { name: string; done: boolean; onDone: (on: boolean) => void }) {
   return (
     <div className="step-foot">
       <button className="step-done" type="button" aria-pressed={done} onClick={() => onDone(!done)} title={done ? "Click to mark it not reviewed" : undefined}>
         <span className="tick" aria-hidden="true">
           {done ? "✓" : ""}
         </span>
-        {done ? `Step ${n} reviewed` : `Mark step ${n} reviewed`}
+        {done ? `${name[0]!.toUpperCase()}${name.slice(1)} reviewed` : `Mark ${name} reviewed`}
       </button>
     </div>
+  );
+}
+
+/** Mechanical changes: after the steps, reviewed like one but unnumbered, with the items folded away. */
+function MechanicalSection({ atoms, done, onDone }: { atoms: ChangeAtom[]; done: boolean; onDone: (on: boolean) => void }) {
+  const lines = atoms.reduce((n, a) => n + a.hunkLines.length, 0);
+  return (
+    <section className={`step mech-step${done ? " done" : ""}`} id="mechanical" data-step="mechanical">
+      <div className="step-marker" aria-hidden="true">
+        <Icon name="wrench" />
+      </div>
+      <div className="step-body">
+        <p className="mech-title">Mechanical changes</p>
+        <p className="muted mech-note">Formatting, renames, import reshuffles, lockfiles and generated files. Every line is here so nothing in the PR goes unseen.</p>
+        <details className="mech-list">
+          <summary>
+            Show {atoms.length} item{atoms.length === 1 ? "" : "s"}, {lines} line{lines === 1 ? "" : "s"}
+          </summary>
+          {atoms.map((a) => (
+            <div className="mech-item" key={a.id}>
+              <span className="tag">{a.mechanical}</span>
+              <AtomBlock atom={a} />
+            </div>
+          ))}
+        </details>
+        <DoneButton name="mechanical changes" done={done} onDone={onDone} />
+      </div>
+    </section>
   );
 }
 
@@ -679,7 +708,7 @@ function Step({ i, step, done, onDone }: { i: number; step: StoryStep; done: boo
             ))}
           </div>
         ) : null}
-        <DoneButton n={i + 1} done={done} onDone={onDone} />
+        <DoneButton name={`step ${i + 1}`} done={done} onDone={onDone} />
       </div>
     </section>
   );
@@ -705,15 +734,16 @@ function usePathHashes(paths: string[]): Map<string, string> {
   return hashes;
 }
 
-function useReviewed(key: string): [Record<number, boolean>, (step: number, on: boolean) => void] {
-  const [done, setDone] = useState<Record<number, boolean>>(() => {
+/** Reviewed marks by step number, and `mechanical` for the mechanical changes. */
+function useReviewed(key: string): [Record<string, boolean>, (step: number | "mechanical", on: boolean) => void] {
+  const [done, setDone] = useState<Record<string, boolean>>(() => {
     try {
       return JSON.parse(localStorage.getItem(key) ?? "{}");
     } catch {
       return {};
     }
   });
-  const set = (step: number, on: boolean) => {
+  const set = (step: number | "mechanical", on: boolean) => {
     const next = { ...done, [step]: on };
     setDone(next);
     try {
@@ -779,6 +809,9 @@ function PendingStep({ i, label, atomIds, active, draft }: { i: number; label: s
   );
 }
 
+/** The outline position of the mechanical changes, apart from step indexes. */
+const MECH = -2;
+
 /** While a story is being written: the text so far of steps still streaming, by step index. */
 export type Writing = { drafts: Record<number, string> };
 
@@ -823,18 +856,39 @@ export function StoryReader({ view, writing, footer, banner, headerExtra, ask }:
   useEffect(() => {
     const io = new IntersectionObserver(
       (entries) => {
-        for (const en of entries) if (en.isIntersecting) setCurrent(+(en.target as HTMLElement).dataset.step! - 1);
+        for (const en of entries) {
+          if (!en.isIntersecting) continue;
+          const step = (en.target as HTMLElement).dataset.step!;
+          setCurrent(step === "mechanical" ? MECH : +step - 1);
+        }
       },
       { rootMargin: "-20% 0px -70% 0px" },
     );
-    document.querySelectorAll(".step").forEach((s) => io.observe(s));
-    return () => io.disconnect();
-  }, [view.plan.length]);
+    const sections = [...document.querySelectorAll<HTMLElement>(".step")];
+    sections.forEach((s) => io.observe(s));
+    // The last section can't scroll up to the line that marks a section current: mark it at the bottom.
+    // The story scrolls inside <main> here, or the window when the layout stacks on a narrow screen.
+    const onScroll = (e: Event) => {
+      const el = e.target instanceof HTMLElement ? e.target : document.documentElement;
+      if (el.scrollTop + el.clientHeight < el.scrollHeight - 2) return;
+      const step = sections[sections.length - 1]?.dataset.step;
+      if (step) setCurrent(step === "mechanical" ? MECH : +step - 1);
+    };
+    const main = mainRef.current;
+    main?.addEventListener("scroll", onScroll, { passive: true });
+    document.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      io.disconnect();
+      main?.removeEventListener("scroll", onScroll);
+      document.removeEventListener("scroll", onScroll);
+    };
+  }, [view.plan.length, !writing && view.mechanical.length > 0]);
 
   const mechAtoms = view.mechanical.map((id) => byId.get(id)).filter((a): a is ChangeAtom => !!a);
-  const mechLines = mechAtoms.reduce((n, a) => n + a.hunkLines.length, 0);
-  const total = view.plan.length;
-  const reviewed = view.plan.filter((_, i) => done[i + 1]).length;
+  // The mechanical changes count toward review once they're shown (after the steps are written).
+  const mechShown = !writing && mechAtoms.length > 0;
+  const total = view.plan.length + (mechShown ? 1 : 0);
+  const reviewed = view.plan.filter((_, i) => done[i + 1]).length + (mechShown && done.mechanical ? 1 : 0);
   const changedLines = atoms.reduce((n, a) => n + a.hunkLines.length, 0);
 
   return (
@@ -847,7 +901,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra, ask }:
             <div style={{ width: total ? `${(100 * reviewed) / total}%` : "0" }} />
           </div>
           <div className="progress-text">
-            {reviewed} of {total} steps reviewed
+            {reviewed} of {total} {mechShown ? "" : "steps "}reviewed
           </div>
           <ol>
             {view.plan.map((s, i) => {
@@ -869,11 +923,14 @@ export function StoryReader({ view, writing, footer, banner, headerExtra, ask }:
                 </li>
               );
             })}
-            {mechAtoms.length ? (
-              <li>
-                <span className="rail-spacer" />
-                <a href="#mechanical">
-                  <span className="n">·</span>Mechanical changes
+            {mechShown ? (
+              <li className={done.mechanical ? "done" : ""}>
+                <input type="checkbox" checked={!!done.mechanical} onChange={(e) => setDone("mechanical", e.target.checked)} aria-label="Mark mechanical changes reviewed" />
+                <a href="#mechanical" className={current === MECH ? "current" : ""}>
+                  <span className="n">
+                    <Icon name="wrench" />
+                  </span>
+                  <span>Mechanical changes</span>
                 </a>
               </li>
             ) : null}
@@ -915,23 +972,7 @@ export function StoryReader({ view, writing, footer, banner, headerExtra, ask }:
             const s = view.steps[i];
             return s ? <Step key={i} i={i} step={s} done={!!done[i + 1]} onDone={(on) => setDone(i + 1, on)} /> : <PendingStep key={i} i={i} label={p.label} atomIds={p.atomIds} active={i === active} draft={writing?.drafts[i]} />;
           })}
-          {!writing && mechAtoms.length ? (
-            <details className="mechanical" id="mechanical">
-              <summary>
-                Mechanical changes{" "}
-                <span className="muted">
-                  · {mechAtoms.length} item{mechAtoms.length === 1 ? "" : "s"}, {mechLines} line{mechLines === 1 ? "" : "s"}
-                </span>
-              </summary>
-              <p className="muted">Formatting, renames, import reshuffles, lockfiles and generated files. Every line is here so nothing in the PR goes unseen.</p>
-              {mechAtoms.map((a) => (
-                <div className="mech-item" key={a.id}>
-                  <span className="tag">{a.mechanical}</span>
-                  <AtomBlock atom={a} />
-                </div>
-              ))}
-            </details>
-          ) : null}
+          {mechShown ? <MechanicalSection atoms={mechAtoms} done={!!done.mechanical} onDone={(on) => setDone("mechanical", on)} /> : null}
           <footer>{footer}</footer>
         </main>
       </div>

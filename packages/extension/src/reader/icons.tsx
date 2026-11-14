@@ -15,6 +15,7 @@ const paths = {
   suggest: "M3 4h6 M6 1v6 M3 12h6 M11 3v10 M11 13l-2-2 M11 13l2-2",
   sparkle: "M7 2.5l1.2 3.3 3.3 1.2-3.3 1.2L7 11.5 5.8 8.2 2.5 7l3.3-1.2z M12.2 10.5v3.5 M10.5 12.2h3.5",
   send: "M2.5 8h10 M9 4.5L12.5 8 9 11.5",
+  wrench: "M11.6 2.5A3.2 3.2 0 0 0 7.65 6.95L3.4 11.2a1 1 0 0 0 1.4 1.4L9.05 8.35A3.2 3.2 0 0 0 13.5 4.4L11.2 4.8z",
 } as const;
 
 export type IconName = keyof typeof paths;
