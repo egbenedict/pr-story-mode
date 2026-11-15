@@ -18,25 +18,31 @@ Everything the store's dashboard asks for, ready to paste. Upload `release/pr-st
 **Description:**
 
 ```text
-Big pull requests are hard to review in file order. PR Story Mode re-reads a GitHub pull request as a story: the changes are put in an order that makes sense — the new type before the code that uses it, the helper before its callers — and each step comes with a short explanation of what changed and why.
+Big pull requests are hard to review in file order. PR Story Mode shows a GitHub pull request as a story instead. It puts the changes in an order that makes sense, such as the new type before the code that uses it, or the helper before its callers, and explains each step in plain language with the code right below the words that describe it.
 
 Every changed line appears exactly once, so nothing is skipped or repeated, and you can still review it line by line.
 
 What you get
 • A "Story mode" button on every GitHub pull request page.
-• Steps in dependency order, each with a plain-language explanation that cites the lines it talks about.
-• Nearby unchanged code (the definition a change relies on, the caller it affects) shown where it helps.
-• Bulky, repetitive changes — data tables, the same edit repeated many times, deleted files — folded so the real code stands out.
-• Select any lines and ask the AI to walk you through them.
+• Steps in dependency order, each explained in a few sentences at a time.
+• Words that link to code: click a phrase in an explanation to jump to the lines it describes.
+• Unchanged code that helps, such as the definition a change relies on or a caller it affects, shown where it's needed.
+• Bulky changes folded away: re-indented code, long data tables, the same edit repeated many times, and deleted files.
+• Mechanical changes (formatting, renames, reordered imports, lockfiles, generated files) collected in their own section after the steps.
+• Highlight any lines and ask for an explanation, or ask your own question about them.
 • Write review comments and submit your review without leaving the story.
-• Walkthroughs are cached, so reopening a pull request is instant and free; after a new push, only the changed steps are redone.
-• GitHub Enterprise support, custom fonts, colors and themes.
+• An outline that tracks which steps you've reviewed.
+• Stories are saved, so reopening a pull request is instant and free.
+• Best support for TypeScript, JavaScript, Python, Go, Rust, Java, Ruby, C# and PHP, and good support for C, C++, JSON, YAML and TOML. Other files are still ordered and explained.
+• GitHub Enterprise support, plus your choice of theme, accent color, diff colors and fonts.
 
 Bring your own model
-PR Story Mode uses your own API key with Anthropic (Claude), OpenAI, or any OpenAI-compatible endpoint, including company AI gateways. Without a key it still shows the changes in a sensible order, without the explanations.
+PR Story Mode uses your own API key with Anthropic (Claude), OpenAI, or any OpenAI-compatible server, including company AI gateways and self-hosted models. A typical pull request costs about 11 cents with Claude Opus 5.5. Without a key it still shows the changes in a sensible order, without the explanations.
 
 Privacy
 There are no servers, accounts or analytics. Your settings and keys stay in your browser, your GitHub token goes only to GitHub, and code goes only to the AI provider you choose.
+
+Open source under GPL v3: https://github.com/egbenedict/pr-story-mode
 ```
 
 **Graphics** (in this folder):
@@ -50,12 +56,13 @@ There are no servers, accounts or analytics. Your settings and keys stay in your
 | Screenshot 4 | `screenshot-4.png`: model settings (Anthropic, OpenAI, gateway, none) | 1280×800 |
 | Screenshot 5 | `screenshot-5.png`: appearance settings with live preview | 1280×800 |
 | Small promo tile | `promo-small.png` (source: `promo.html`) | 440×280 |
+| GitHub social preview (not for the store) | `social-preview.png` (source: `social.html`); upload it in the repo's Settings → Social preview | 1280×640 |
 
 All are PNGs without transparency, as the store requires. The screenshots show a real story for [luau-lang/luau#2981](https://github.com/luau-lang/luau/pull/2981), written by Claude Opus 5.5 and loaded from the reader's cache.
 
 **Links:**
-- Homepage URL: the GitHub repo, once it's public; otherwise leave it empty.
-- Support URL: the repo's issues page, once public; otherwise leave it empty.
+- Homepage URL: https://github.com/egbenedict/pr-story-mode
+- Support URL: https://github.com/egbenedict/pr-story-mode/issues
 
 ## Privacy tab
 
