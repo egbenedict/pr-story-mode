@@ -45,7 +45,7 @@ There are no servers, accounts or analytics. Your settings and keys stay in your
 |---|---|---|
 | Store icon | `../icons/icon-128.png` (also inside the zip) | 128×128 |
 | Screenshot 1 | `screenshot-1.png`: summary, outline and the first step | 1280×800 |
-| Screenshot 2 | `screenshot-2.png`: lines selected, with the "Explain 6 lines" / "Ask…" bar | 1280×800 |
+| Screenshot 2 | `screenshot-2.png`: lines selected, with the "Explain 5 lines" / "Ask…" bar | 1280×800 |
 | Screenshot 3 | `screenshot-3.png`: dark theme, re-indented lines folded | 1280×800 |
 | Screenshot 4 | `screenshot-4.png`: model settings (Anthropic, OpenAI, gateway, none) | 1280×800 |
 | Screenshot 5 | `screenshot-5.png`: appearance settings with live preview | 1280×800 |
