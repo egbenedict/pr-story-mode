@@ -183,4 +183,4 @@ To try your build of the extension:
 
 ## License
 
-[GPL v3](LICENSE). Questions: egbenedictdev@gmail.com.
+[MIT](LICENSE). Questions: egbenedictdev@gmail.com.

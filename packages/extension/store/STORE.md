@@ -42,7 +42,7 @@ PR Story Mode uses your own API key with Anthropic (Claude), OpenAI, or any Open
 Privacy
 There are no servers, accounts or analytics. Your settings and keys stay in your browser, your GitHub token goes only to GitHub, and code goes only to the AI provider you choose.
 
-Open source under GPL v3: https://github.com/egbenedict/pr-story-mode
+Open source under the MIT license: https://github.com/egbenedict/pr-story-mode
 ```
 
 **Graphics** (in this folder):
