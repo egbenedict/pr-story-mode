@@ -51,14 +51,14 @@ Open source under the MIT license: https://github.com/egbenedict/pr-story-mode
 |---|---|---|
 | Store icon | `../icons/icon-128.png` (also inside the zip) | 128×128 |
 | Screenshot 1 | `screenshot-1.png`: summary, outline and the first step | 1280×800 |
-| Screenshot 2 | `screenshot-2.png`: lines selected, with the "Explain 5 lines" / "Ask…" bar | 1280×800 |
+| Screenshot 2 | `screenshot-2.png`: lines selected, with the "Explain 6 lines" / "Ask…" bar | 1280×800 |
 | Screenshot 3 | `screenshot-3.png`: dark theme, re-indented lines folded | 1280×800 |
 | Screenshot 4 | `screenshot-4.png`: model settings (Anthropic, OpenAI, gateway, none) | 1280×800 |
 | Screenshot 5 | `screenshot-5.png`: appearance settings with live preview | 1280×800 |
 | Small promo tile | `promo-small.png` (source: `promo.html`) | 440×280 |
 | GitHub social preview (not for the store) | `social-preview.png` (source: `social.html`); upload it in the repo's Settings → Social preview | 1280×640 |
 
-All are PNGs without transparency, as the store requires. The screenshots show a real story for [luau-lang/luau#2981](https://github.com/luau-lang/luau/pull/2981), written by Claude Opus 5.5 and loaded from the reader's cache.
+All are PNGs without transparency, as the store requires. The screenshots show a real story for [sindresorhus/ky#809](https://github.com/sindresorhus/ky/pull/809), written by Claude Opus 5.5 and loaded from the reader's cache.
 
 **Links:**
 - Homepage URL: https://github.com/egbenedict/pr-story-mode
