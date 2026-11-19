@@ -135,7 +135,7 @@ describe("context retrieval", () => {
   });
 
   it("doesn't call a header's declaration of the changed function a caller", async () => {
-    // Shaped like Luau's lbuffer.h: the declaration hides behind a macro defined elsewhere.
+    // Shaped like a Lua-style header: the declaration hides behind a macro defined elsewhere.
     const c = makeRepo(
       {
         "src/lbuf.h": '#pragma once\n\n#include "lobject.h"\n\nLUAI_FUNC Buffer* newbuf(lua_State* L, size_t s);\nLUAI_FUNC void freebuf(lua_State* L, Buffer* u);\n',

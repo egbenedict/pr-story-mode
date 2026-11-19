@@ -95,7 +95,7 @@ All of it lives in `packages/core/src`, which runs unchanged in the CLI and the 
 - **Definitions** are the unit's name plus what the grammar's `tags.scm` query marks as defined in it (for example `const a = 1, b = 2`). Members are also known by their class, as `C.m`.
 - **References** are identifiers, minus parameters, locals bound inside the atom, and keyword-argument names. Name matching alone can't do this: C and C++ ship no reference queries, and JS/Python only tag calls.
 - **Members** have special rules. `this.m()` / `self.m()` inside class `C` becomes `C.m` and links only to C's own `m` (or an inherited one when C has none in the PR). Other property reads and writes and object keys (`opts.retries`, `{ retries: 3 }`) link only to class or interface members, never to a global of the same name. `a.b()` and `@a.b` decorators link by name.
-- On the 60 benchmark PRs this removed 92 wrong edges (class atoms "using" their own method names, `ctx.request` matched to the global `request`, locals shadowing functions) and found 87 new ones, mostly calls between `#private` methods.
+- On the benchmark PRs this removed wrong edges (class atoms "using" their own method names, `ctx.request` matched to the global `request`, locals shadowing functions) and found new ones, mostly calls between `#private` methods.
 </details>
 
 ### Ordering
@@ -119,7 +119,7 @@ Each step can show code the PR didn't change, collapsed above the step and label
 - **Steps that change only comments** get no context. Comment lines are found per file, including doc blocks written without a leading `*`.
 - **Test steps** skip helpers from outside the PR and callers that are other tests.
 - Definitions keep the doc comment above them. A slice of a long function or table keeps its opening line, and the lines that mention the symbol are highlighted.
-- **Sources:** the PR's own files, then the rest of the repository, through `git grep` on a local clone or, without one, the GitHub source: one API request lists the repository, likely files are ranked (what the changed files import or include in TS/JS, Python, C/C++, Go, Java, Rust, Ruby, PHP and C#, then nearby directories), and up to 80 files or 3 MB are read while the model orders the steps, plus files named after a symbol that wasn't found. On luau#2579 this finds the same callers as `git grep`.
+- **Sources:** the PR's own files, then the rest of the repository, through `git grep` on a local clone or, without one, the GitHub source: one API request lists the repository, likely files are ranked (what the changed files import or include in TS/JS, Python, C/C++, Go, Java, Rust, Ruby, PHP and C#, then nearby directories), and up to 80 files or 3 MB are read while the model orders the steps, plus files named after a symbol that wasn't found.
 - **Avoiding false matches:** a definition in another file needs a matching import in TS, JS and Python; names with more than 3 definitions are skipped; one-line class members are skipped; a C prototype of the changed function isn't a caller; test files never supply context for non-test code.
 </details>
 
@@ -208,7 +208,7 @@ Add `&demo` for a scripted model (`src/reader/demo.ts`) that streams a plausible
 
 ## Benchmarks
 
-The same 60 PRs throughout: the last 20 Flask merges, and the last 20 ky and luau commits of 20 to 3,000 lines.
+The same 40 PRs throughout: the last 20 Flask merges and the last 20 ky commits, each of 20 to 3,000 lines.
 
 ### Phase 1: coverage without a model
 
@@ -218,18 +218,16 @@ With unchanged context read from local clones.
 |---|---|---|---|---|---|
 | pallets/flask | Python | 20/20 | 235 | 143 across 376 steps | 0.4 s |
 | sindresorhus/ky | TypeScript | 20/20 | 235 | 401 across 468 steps | 0.9 s |
-| luau-lang/luau | C++ | 20/20 | 258 | 190 across 222 steps | 2.6 s |
 
-### Phase 2: Opus 5.5 (November 2026, $10.53 in all)
+### Phase 2: Opus 5.5 (November 2026, $8.15 in all)
 
 | Repo | Coverage | Steps | Cost | Repair rounds | Fallbacks | Citations dropped (worst PR) | First step (median) | Whole story (median) |
 |---|---|---|---|---|---|---|---|---|
 | Flask | 20/20 | 171 | $3.24 | 3 | 0 | 1.9% | 15.5 s | 28.4 s |
 | ky | 20/20 | 258 | $4.91 | 4 | 0 | 3.8% | 14.8 s | 45.5 s |
-| luau | 20/20 | 102 | $2.38 | 8 | 0 | 10.0% | 16.4 s | 25.8 s |
 
 - No model call failed, every step got an explanation, and no plan broke dependency order without saying why. One beat cut point had to be moved.
-- 0.46% of citations were dropped by the grounding check on average.
+- 0.27% of citations were dropped by the grounding check on average.
 - The most expensive PR cost $1.11 (ky, 1,576 lines). No PR was large enough to need staged ordering.
 - On the 15 PRs from the earlier pilot, tighter context cut what the model is sent (ky: 384k to 338k input tokens, 169 to 94 context snippets).
 - This measures the pipeline's mechanics, not how good the explanations read; that needs people reading the stories.

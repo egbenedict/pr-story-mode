@@ -450,7 +450,7 @@ export function nameOf(node: Node): string | null {
     const inner = call.type === "await_expression" ? call.namedChildren[0] : call;
     const fn = inner?.childForFieldName("function");
     const first = inner?.childForFieldName("arguments")?.namedChildren[0];
-    // C/C++ macros such as LUAU_FASTFLAGVARIABLE(Name, false) or DEFINE_FLAG(name): they define their first argument.
+    // C/C++ macros such as FEATURE_FLAG(Name, false) or DEFINE_FLAG(name): they define their first argument.
     if (fn && /^[A-Z][A-Z0-9_]{2,}$/.test(fn.text) && first && /identifier$/.test(first.type)) return cleanName(first.text);
     if (fn && fn.text.length <= 40 && first && /string/.test(first.type)) {
       const q = first.text[0];

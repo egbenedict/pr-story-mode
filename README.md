@@ -84,7 +84,7 @@ For a company gateway that speaks Anthropic's API, choose Anthropic, fill in the
 The command-line tool writes the same story as a single HTML page you can open, save or share. It needs [Node.js](https://nodejs.org/) 20 or later.
 
 ```bash
-git clone https://github.com/egbenedict/pr-story-mode.git
+git clone https://github.com/pr-story-mode/pr-story-mode.git
 cd pr-story-mode
 npm install
 npm run build:cli

@@ -42,7 +42,7 @@ PR Story Mode uses your own API key with Anthropic (Claude), OpenAI, or any Open
 Privacy
 There are no servers, accounts or analytics. Your settings and keys stay in your browser, your GitHub token goes only to GitHub, and code goes only to the AI provider you choose.
 
-Open source under the MIT license: https://github.com/egbenedict/pr-story-mode
+Open source under the MIT license: https://github.com/pr-story-mode/pr-story-mode
 ```
 
 **Graphics** (in this folder):
@@ -61,8 +61,8 @@ Open source under the MIT license: https://github.com/egbenedict/pr-story-mode
 All are PNGs without transparency, as the store requires. The screenshots show a real story for [sindresorhus/ky#809](https://github.com/sindresorhus/ky/pull/809), written by Claude Opus 5.5 and loaded from the reader's cache.
 
 **Links:**
-- Homepage URL: https://github.com/egbenedict/pr-story-mode
-- Support URL: https://github.com/egbenedict/pr-story-mode/issues
+- Homepage URL: https://github.com/pr-story-mode/pr-story-mode
+- Support URL: https://github.com/pr-story-mode/pr-story-mode/issues
 
 ## Privacy tab
 
@@ -92,7 +92,7 @@ Leave everything else unticked: personally identifiable info, health, financial,
 - ☑ I do not use or transfer user data for purposes that are unrelated to my item's single purpose.
 - ☑ I do not use or transfer user data to determine creditworthiness or for lending purposes.
 
-**Privacy policy URL:** https://gist.github.com/egbenedict/3c19667ca8fc936adfc44e807461c373 (a copy of [`PRIVACY.md`](../../../PRIVACY.md); update the gist when the policy changes)
+**Privacy policy URL:** https://docs.google.com/document/d/e/2PACX-1vTFNol6JSWMFpVtrby8Dl9NCwHIXgPITiZbbvqWA6-8r7F6K3JuSH-t1mspg9nynUf-2N00_DLEGzJF/pub (a copy of [`PRIVACY.md`](../../../PRIVACY.md); update the published Google Doc when the policy changes)
 
 ## Distribution tab
 

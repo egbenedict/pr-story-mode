@@ -14,7 +14,7 @@ const repoFiles = [
   "VM/src/lmem.cpp",
   "VM/src/lmem.h",
   "VM/include/lua.h",
-  "Common/include/Luau/Common.h",
+  "Common/include/Core/Common.h",
   "cmd/server/main.go",
   "internal/store/store.go",
   "internal/store/store_test.go",
@@ -50,10 +50,10 @@ describe("importedPaths", () => {
       "src/lib/net.ts",
     ]);
     expect(importedPaths("pkg/core/views.py", "from .models import Order\nfrom .. import utils\nimport os\n", files, dirs)).toEqual(["pkg/core/models.py", "pkg/utils.py"]);
-    expect(importedPaths("VM/src/lmem.cpp", `#include "lmem.h"\n#include "lua.h"\n#include "Luau/Common.h"\n#include <string.h>\n`, files, dirs)).toEqual([
+    expect(importedPaths("VM/src/lmem.cpp", `#include "lmem.h"\n#include "lua.h"\n#include "Core/Common.h"\n#include <string.h>\n`, files, dirs)).toEqual([
       "VM/src/lmem.h",
       "VM/include/lua.h",
-      "Common/include/Luau/Common.h",
+      "Common/include/Core/Common.h",
     ]);
     expect(importedPaths("cmd/server/main.go", `import (\n  "fmt"\n  "example.com/app/internal/store"\n)\n`, files, dirs)).toEqual(["internal/store/store.go"]);
     expect(importedPaths("src/main/java/com/acme/Order.java", "import com.acme.billing.Invoice;\nimport java.util.List;\n", files, dirs)).toEqual(["src/main/java/com/acme/billing/Invoice.java"]);

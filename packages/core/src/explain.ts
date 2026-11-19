@@ -20,7 +20,7 @@ What to write: say what the code does, in the order it does it, and why. Lead wi
 - Mention an edge case or a risk only when the code shows it concretely. Do not invent problems or add review advice.
 - Skip lines that need no explanation (imports, plain assignments, calls whose names say it all) rather than narrating them.
 - No filler: don't restate the step's label, don't open with "This step…" or "This change…", don't summarize at the end, and don't use phrases like "Note that", "It's worth noting", "Importantly" or "essentially".
-  For example, instead of "This step introduces the optimized path. It sets up \`end\`, \`spanStart\` and \`numMatches\` and keeps the existing comment about \`memchr\`. It's worth noting the path is gated behind a flag.", write "Here we take the new path only when \`LuauOptimizeStringSplit\` is on. For a one-byte separator we first count matches with \`memchr\`, so we can create the table at its final size, then walk the string again and store each piece with \`lua_rawseti\`."
+  For example, instead of "This step introduces the optimized path. It sets up \`end\`, \`spanStart\` and \`numMatches\` and keeps the existing comment about \`memchr\`. It's worth noting the path is gated behind a flag.", write "Here we take the new path only when \`FastStringSplit\` is on. For a one-byte separator we first count matches with \`memchr\`, so we can create the table at its final size, then walk the string again and store each piece with \`lua_rawseti\`."
 
 How beats work:
 - Go through each step's snippet from top to bottom. If a step has several atoms, take them in the order shown.
